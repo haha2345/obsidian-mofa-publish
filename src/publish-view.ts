@@ -1,0 +1,489 @@
+/**
+ * 墨发发布面板 — 侧边栏视图
+ * 极简 3 步操作：选主题 → 预览 → 发布
+ */
+
+import { ItemView, WorkspaceLeaf, Notice, TFile } from 'obsidian';
+import type MofaPlugin from './main';
+import { MarkdownRenderer } from './renderer/markdown-renderer';
+import { makeWechatCompatible } from './renderer/wechat-compat';
+import { processMermaidBlocks } from './renderer/mermaid-renderer';
+import { processImagesForCopy } from './renderer/image-processor';
+import { copyRichTextToClipboard } from './utils/clipboard';
+import { getBuiltinThemes, getThemeById } from './themes/theme-manager';
+
+export const MOFA_VIEW_TYPE = 'mofa-publish-view';
+
+export class MofaPublishView extends ItemView {
+    private plugin: MofaPlugin;
+    private previewEl: HTMLElement | null = null;
+    private themeSelect: HTMLSelectElement | null = null;
+    private previewMode: 'mobile' | 'desktop' = 'mobile';
+    private currentHtml: string = '';
+    private renderer: MarkdownRenderer;
+    private statusEl: HTMLElement | null = null;
+
+    constructor(leaf: WorkspaceLeaf, plugin: MofaPlugin) {
+        super(leaf);
+        this.plugin = plugin;
+        this.renderer = new MarkdownRenderer(plugin.settings, plugin.app);
+    }
+
+    getViewType() {
+        return MOFA_VIEW_TYPE;
+    }
+
+    getDisplayText() {
+        return '墨发 发布';
+    }
+
+    getIcon() {
+        return 'send';
+    }
+
+    async onOpen() {
+        const container = this.containerEl.children[1] as HTMLElement;
+        container.empty();
+        container.addClass('mofa-publish-panel');
+
+        // ===== 标题栏 =====
+        const header = container.createDiv('mofa-header');
+        header.createEl('h3', { text: '📤 发布到公众号' });
+
+        // ===== 主题选择器 =====
+        const themeBar = container.createDiv('mofa-theme-bar');
+        themeBar.createEl('span', { text: '🎨 主题', cls: 'mofa-label' });
+
+        this.themeSelect = themeBar.createEl('select', { cls: 'mofa-theme-select' });
+        const themes = getBuiltinThemes();
+        themes.forEach((theme) => {
+            const opt = this.themeSelect!.createEl('option', { text: theme.name, value: theme.id });
+            if (theme.id === this.plugin.settings.defaultTheme) {
+                opt.selected = true;
+            }
+        });
+        this.themeSelect.addEventListener('change', () => {
+            this.refreshPreview();
+        });
+
+        // ===== 预览区域 =====
+        const previewWrapper = container.createDiv('mofa-preview-wrapper');
+
+        // 预览模式切换
+        const modeBar = previewWrapper.createDiv('mofa-mode-bar');
+        const mobileBtn = modeBar.createEl('button', { text: '📱 手机', cls: 'mofa-mode-btn mofa-mode-active' });
+        const desktopBtn = modeBar.createEl('button', { text: '💻 电脑', cls: 'mofa-mode-btn' });
+
+        mobileBtn.addEventListener('click', () => {
+            this.previewMode = 'mobile';
+            mobileBtn.addClass('mofa-mode-active');
+            desktopBtn.removeClass('mofa-mode-active');
+            this.updatePreviewSize();
+        });
+        desktopBtn.addEventListener('click', () => {
+            this.previewMode = 'desktop';
+            desktopBtn.addClass('mofa-mode-active');
+            mobileBtn.removeClass('mofa-mode-active');
+            this.updatePreviewSize();
+        });
+
+        this.previewEl = previewWrapper.createDiv('mofa-preview');
+        this.previewEl.createEl('p', {
+            text: '👈 打开一篇笔记后自动预览',
+            cls: 'mofa-placeholder',
+        });
+
+        // ===== 状态栏 =====
+        this.statusEl = container.createDiv('mofa-status');
+        this.statusEl.setText('就绪');
+
+        // ===== 操作按钮 =====
+        const actionBar = container.createDiv('mofa-action-bar');
+
+        const copyBtn = actionBar.createEl('button', {
+            text: '📋 复制到公众号',
+            cls: 'mofa-btn mofa-btn-primary',
+        });
+        copyBtn.addEventListener('click', () => this.copyToClipboard());
+
+        const draftBtn = actionBar.createEl('button', {
+            text: '📤 发送到草稿箱',
+            cls: 'mofa-btn mofa-btn-secondary',
+        });
+        draftBtn.addEventListener('click', () => this.publishToDraft());
+
+        // ===== 提示信息 =====
+        const tipEl = container.createDiv('mofa-tip');
+        tipEl.createEl('p', {
+            text: '💡 复制后到微信公众号编辑器直接 Ctrl+V 粘贴即可',
+            cls: 'mofa-tip-text',
+        });
+
+        // 监听文件切换和修改
+        this.registerEvent(
+            this.app.workspace.on('active-leaf-change', () => {
+                this.refreshPreview();
+            })
+        );
+
+        this.registerEvent(
+            this.app.vault.on('modify', (file) => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (activeFile && file.path === activeFile.path) {
+                    // debounce
+                    this.debounceRefresh();
+                }
+            })
+        );
+
+        // 初始渲染
+        this.refreshPreview();
+    }
+
+    private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    private debounceRefresh() {
+        if (this.refreshTimer) clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => this.refreshPreview(), 800);
+    }
+
+    async onClose() {
+        if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    }
+
+    private updatePreviewSize() {
+        if (!this.previewEl) return;
+        if (this.previewMode === 'mobile') {
+            this.previewEl.style.maxWidth = '375px';
+            this.previewEl.style.margin = '0 auto';
+        } else {
+            this.previewEl.style.maxWidth = '100%';
+            this.previewEl.style.margin = '0';
+        }
+    }
+
+    /**
+     * 刷新预览
+     */
+    async refreshPreview() {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile || !this.previewEl) {
+            if (this.previewEl) {
+                this.previewEl.innerHTML = '<p class="mofa-placeholder">👈 打开一篇笔记后自动预览</p>';
+            }
+            return;
+        }
+
+        if (activeFile.extension !== 'md') {
+            this.previewEl.innerHTML = '<p class="mofa-placeholder">仅支持 Markdown 文件</p>';
+            return;
+        }
+
+        this.setStatus('渲染中...');
+
+        try {
+            const content = await this.app.vault.read(activeFile);
+
+            // 1. Markdown → HTML
+            const rawHtml = this.renderer.render(content, activeFile.path);
+
+            // 2. 处理 Mermaid 图表
+            const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
+
+            // 3. 获取主题 CSS
+            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
+            const theme = getThemeById(selectedThemeId);
+            const themeCSS = theme?.css || '';
+
+            // 4. 包装为文章结构
+            const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+
+            // 5. 应用主题样式到预览（预览时不 inline 化，保持可读性）
+            // KaTeX CSS 通过 CDN 引入，确保数学公式正常展示
+            const katexCSS = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">`;
+            this.previewEl.innerHTML = `${katexCSS}<style>${themeCSS}</style>${articleHtml}`;
+
+            // 保存原始 HTML 用于复制
+            this.currentHtml = articleHtml;
+            this.setStatus('✅ 预览就绪');
+
+        } catch (error) {
+            console.error('渲染失败:', error);
+            this.previewEl.innerHTML = `<p style="color: red;">渲染失败: ${(error as Error).message}</p>`;
+            this.setStatus('❌ 渲染失败');
+        }
+    }
+
+    /**
+     * 复制到公众号（核心功能，零配置可用）
+     */
+    async copyToClipboard() {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('请先打开一篇笔记');
+            return;
+        }
+
+        this.setStatus('正在处理...');
+
+        try {
+            // 重新渲染确保最新
+            const content = await this.app.vault.read(activeFile);
+            const rawHtml = this.renderer.render(content, activeFile.path);
+            const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
+
+            // 获取主题
+            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
+            const theme = getThemeById(selectedThemeId);
+            const themeCSS = theme?.css || '';
+
+            const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+
+            // 处理图片（全部转 Base64）
+            this.setStatus('处理图片中...');
+            const htmlWithImages = await processImagesForCopy(articleHtml, this.app, activeFile.path);
+
+            // 微信 DOM 兼容性处理（inline 化样式）
+            this.setStatus('适配微信格式...');
+            const wechatHtml = makeWechatCompatible(htmlWithImages, { themeCSS });
+
+            // 复制到剪贴板
+            await copyRichTextToClipboard(wechatHtml);
+            this.setStatus('✅ 已复制！去公众号粘贴吧');
+
+        } catch (error) {
+            console.error('复制失败:', error);
+            new Notice('❌ 复制失败: ' + (error as Error).message);
+            this.setStatus('❌ 复制失败');
+        }
+    }
+
+    /**
+     * 发送到草稿箱（需要 API 配置）
+     */
+    async publishToDraft() {
+        if (!this.plugin.settings.wechatAppId || !this.plugin.settings.wechatAppSecret) {
+            new Notice('⚙️ 请先在设置中填写公众号的 AppID 和 AppSecret');
+            const setting = (this.app as any).setting;
+            if (setting) {
+                setting.open();
+                setting.openTabById('mofa-publish');
+            }
+            return;
+        }
+
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('请先打开一篇笔记');
+            return;
+        }
+
+        this.setStatus('正在发布到草稿箱...');
+
+        try {
+            const { wxGetToken, wxUploadImage, wxAddDraft, wxBatchGetMaterial } = await import('./wechat/wechat-api');
+
+            // 1. 获取 access_token
+            this.setStatus('获取 Token...');
+            const token = await wxGetToken(
+                this.plugin.settings.wechatAppId,
+                this.plugin.settings.wechatAppSecret
+            );
+
+            // 2. 渲染文章
+            this.setStatus('渲染文章...');
+            const content = await this.app.vault.read(activeFile);
+            const rawHtml = this.renderer.render(content, activeFile.path);
+            const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
+
+            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
+            const theme = getThemeById(selectedThemeId);
+            const themeCSS = theme?.css || '';
+
+            const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+
+            // 3. 上传所有图片到公众号
+            this.setStatus('上传图片...');
+            const htmlWithUploadedImages = await this.uploadAllImages(articleHtml, activeFile.path, token, wxUploadImage);
+
+            // 4. 微信 DOM 兼容处理
+            this.setStatus('适配微信格式...');
+            const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, { themeCSS });
+
+            // 5. 解析 frontmatter 元数据
+            const metadata = this.renderer.extractFrontmatter(content);
+            const fm = metadata.frontmatter;
+
+            // 智能提取标题：frontmatter -> 一级标题 -> 文件名
+            let title = fm['title'];
+            if (!title) {
+                const h1Match = content.match(/^#\s+(.+)$/m);
+                title = h1Match ? h1Match[1].trim() : activeFile.basename;
+            }
+            const author = fm['author'] || '';
+            const digest = fm['digest'] || '';
+
+            // 6. 获取封面（优先：frontmatter -> 文章首图 -> 微信已有素材）
+            this.setStatus('处理封面...');
+            let thumbMediaId = fm['thumb_media_id'] || '';
+
+            if (!thumbMediaId) {
+                // 尝试提取文章中的第一张图片上传为封面素材(需要 add_material 接口)
+                const container = document.createElement('div');
+                container.innerHTML = articleHtml;
+                const firstImg = container.querySelector('img');
+                if (firstImg) {
+                    const src = firstImg.getAttribute('src');
+                    if (src) {
+                        this.setStatus('上传首图作为封面...');
+                        const blob = await this.fetchImageAsBlob(src, activeFile.path);
+                        if (blob) {
+                            const uploadRes = await wxUploadImage(blob, 'cover.png', token, 'image');
+                            if (uploadRes.media_id) {
+                                thumbMediaId = uploadRes.media_id;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!thumbMediaId) {
+                // 如果文章没有图片，则尝试从微信已有素材取一张
+                try {
+                    const materials = await wxBatchGetMaterial(token, 'image');
+                    if (materials.item_count > 0) {
+                        thumbMediaId = materials.item[0].media_id;
+                    }
+                } catch (e) {
+                    console.warn('获取默认封面失败:', e);
+                }
+            }
+
+            // 最后依然没有封面，创建草稿会失败，拦截提示
+            if (!thumbMediaId) {
+                new Notice('⚠️ 文章内没有图片，且公众号后台无可用图片，无法生成封面。请至少插入一张图片！');
+                this.setStatus('❌ 缺少封面素材');
+                return;
+            }
+
+            // 7. 创建草稿
+            this.setStatus('创建草稿...');
+            const res = await wxAddDraft(token, {
+                title,
+                author,
+                digest,
+                content: wechatHtml,
+                thumb_media_id: thumbMediaId,
+                need_open_comment: fm['open_comment'] === 'true' ? 1 : 0,
+            });
+
+            if (res.status !== 200) {
+                const errData = res.json;
+                throw new Error(`HTTP ${res.status}: ${errData?.errmsg || '未知错误'}`);
+            }
+
+            const draft = res.json;
+            if (draft.media_id) {
+                new Notice('✅ 已发送到草稿箱！请到公众号后台查看');
+                this.setStatus('✅ 发布成功！');
+            } else {
+                throw new Error(draft.errmsg || '创建草稿失败');
+            }
+
+        } catch (error) {
+            console.error('发布失败:', error);
+            new Notice('❌ 发布失败: ' + (error as Error).message);
+            this.setStatus('❌ 发布失败');
+        }
+    }
+
+    /**
+     * 上传 HTML 中的所有图片到微信，替换 src 为微信 CDN URL
+     */
+    private async uploadAllImages(
+        html: string,
+        sourcePath: string,
+        token: string,
+        wxUploadImage: Function
+    ): Promise<string> {
+        const container = document.createElement('div');
+        container.innerHTML = html;
+        const images = container.querySelectorAll('img');
+
+        for (const img of Array.from(images)) {
+            const src = img.getAttribute('src') || '';
+            if (!src) continue;
+            // 已经是微信 URL 的跳过
+            if (src.includes('mmbiz.qpic.cn')) continue;
+
+            try {
+                const blob = await this.fetchImageAsBlob(src, sourcePath);
+                if (blob) {
+                    // 获取后缀名确保微信不报错
+                    let filename = src.split('/').pop()?.split('?')[0] || 'image.png';
+                    const extMatch = src.match(/data:image\/(\w+)/);
+                    if (extMatch) filename = `image.${extMatch[1]}`;
+
+                    const result = await wxUploadImage(blob, filename, token);
+                    if (result.url) {
+                        img.setAttribute('src', result.url);
+                    } else if (result.errcode) {
+                        console.warn(`图片上传失败: ${result.errmsg}`);
+                    }
+                }
+            } catch (e) {
+                console.warn(`上传图片失败: ${src}`, e);
+            }
+        }
+
+        return container.innerHTML;
+    }
+
+    /**
+     * 获取图片的 Blob 数据（支持全部网络协议、DataURI、Vault app:// 协议及相对路径）
+     */
+    private async fetchImageAsBlob(src: string, sourcePath: string): Promise<Blob | null> {
+        try {
+            // Obsidian 支持通过 fetch 直接获取 app:// 协议的文件。http 和 data URI 也支持
+            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('app://')) {
+                const resp = await fetch(src);
+                if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+                return await resp.blob();
+            }
+
+            // 对于纯相对路径的情况的后备处理（理论上已被 resolveImagePaths 处理，但以防万一）
+            const vault = this.app.vault;
+            let file = vault.getAbstractFileByPath(src);
+            if (!file) {
+                const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+                const relPath = sourceDir ? `${sourceDir}/${src}` : src;
+                file = vault.getAbstractFileByPath(relPath);
+            }
+            if (!file) {
+                const linked = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
+                if (linked) file = linked;
+            }
+
+            if (file && file instanceof TFile) {
+                const arrayBuf = await vault.readBinary(file);
+                const ext = file.extension.toLowerCase();
+                const mimeMap: Record<string, string> = {
+                    'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                    'gif': 'image/gif', 'webp': 'image/webp',
+                };
+                return new Blob([arrayBuf], { type: mimeMap[ext] || 'image/png' });
+            }
+
+            return null;
+        } catch (error) {
+            console.warn(`读取图片失败 (${src}):`, error);
+            return null;
+        }
+    }
+
+    private setStatus(text: string) {
+        if (this.statusEl) {
+            this.statusEl.setText(text);
+        }
+    }
+}
