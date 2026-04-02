@@ -159,21 +159,42 @@ export class MofaPublishView extends ItemView {
         this.themeSelect.empty();
 
         const savedThemeId = this.plugin.settings.defaultTheme;
-
-        // 内置主题
         const builtinThemes = getBuiltinThemes();
-        builtinThemes.forEach((theme) => {
-            const opt = this.themeSelect!.createEl('option', { text: theme.name, value: theme.id });
-            if (theme.id === savedThemeId) opt.selected = true;
+
+        // 预定义分类映射
+        const categoryNames = {
+            'basic': '📄 基础系列',
+            'elegant': '✨ 优雅系列',
+            'tech': '💻 技术系列',
+            'creative': '🎨 创意系列'
+        };
+
+        // 按分类对内置主题进行分组
+        const groups: Record<string, Theme[]> = {};
+        builtinThemes.forEach(theme => {
+            const cat = theme.category || 'basic';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(theme);
         });
+
+        // 依次渲染各个分组
+        for (const [catKey, catName] of Object.entries(categoryNames)) {
+            if (groups[catKey] && groups[catKey].length > 0) {
+                const groupEl = this.themeSelect.createEl('optgroup', { attr: { label: `── ${catName} ──` } });
+                groups[catKey].forEach(theme => {
+                    const opt = groupEl.createEl('option', { text: theme.name, value: theme.id });
+                    if (theme.id === savedThemeId) opt.selected = true;
+                });
+            }
+        }
 
         // 加载外部主题
         this.externalThemes = await this.loadExternalThemes();
         if (this.externalThemes.length > 0) {
             // 添加分隔 optgroup
-            const group = this.themeSelect.createEl('optgroup', { attr: { label: '── 自定义主题 ──' } });
+            const groupEl = this.themeSelect.createEl('optgroup', { attr: { label: '── 自定义主题 ──' } });
             this.externalThemes.forEach((theme) => {
-                const opt = group.createEl('option', { text: theme.name, value: theme.id });
+                const opt = groupEl.createEl('option', { text: theme.name, value: theme.id });
                 if (theme.id === savedThemeId) opt.selected = true;
             });
         }
