@@ -317,21 +317,16 @@ export class MofaPublishView extends ItemView {
             // 4.5 替换 <hr> 为 SVG 装饰分割线（预览中也要显示）
             articleHtml = this.replaceDividers(articleHtml);
 
-            // 5. 应用主题样式到预览
-            const katexCSSUrl = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
-            // 基础保护样式：防止图片溢出 + 居中
-            const baseCss = `.mofa-article { overflow: hidden; box-sizing: border-box; } .mofa-article * { box-sizing: border-box; } .mofa-article img { max-width: 100% !important; height: auto !important; display: block; margin-left: auto; margin-right: auto; }`;
+            // 5. 应用主题样式到预览（使用 inline 化方式，因为 Obsidian 不允许创建 link/style 元素）
+            // 基础保护样式已移入 styles.css (.mofa-preview .mofa-article)
+            // 主题 CSS 通过 inline 化注入到文章元素
+            const previewHtml = makeWechatCompatible(articleHtml, { themeCSS });
 
             // 使用 DOM API 构建预览内容
             this.previewEl.empty();
-            const linkEl = this.previewEl.createEl('link');
-            linkEl.setAttribute('rel', 'stylesheet');
-            linkEl.setAttribute('href', katexCSSUrl);
-            const styleEl = this.previewEl.createEl('style');
-            styleEl.textContent = `${baseCss}\n${themeCSS}`;
 
-            // 解析文章 HTML 并附加到预览
-            const articleDoc = new DOMParser().parseFromString(articleHtml, 'text/html');
+            // 解析处理后的文章 HTML 并附加到预览
+            const articleDoc = new DOMParser().parseFromString(previewHtml, 'text/html');
             for (const child of Array.from(articleDoc.body.childNodes)) {
                 this.previewEl.appendChild(child);
             }
@@ -564,7 +559,12 @@ export class MofaPublishView extends ItemView {
             }
         }
 
-        return doc.body.innerHTML;
+        const serializer = new XMLSerializer();
+        let result = '';
+        for (let i = 0; i < doc.body.childNodes.length; i++) {
+            result += serializer.serializeToString(doc.body.childNodes[i]);
+        }
+        return result.replace(/ xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g, '');
     }
 
     /**

@@ -46,8 +46,8 @@ export async function renderMermaidToPng(
         // 等待 Mermaid SVG 渲染完成
         await waitForMermaidSVG(container, 5000);
 
-        const mermaidEl = container.querySelector('.mermaid') as HTMLElement;
-        if (!mermaidEl || !mermaidEl.children.length) {
+        const mermaidEl = container.querySelector('.mermaid');
+        if (!mermaidEl || !(mermaidEl instanceof HTMLElement) || !mermaidEl.children.length) {
             throw new Error('Mermaid 渲染失败：未生成 SVG');
         }
 
@@ -110,7 +110,12 @@ export async function processMermaidBlocks(
         }
     }
 
-    return container.innerHTML;
+    const serializer = new XMLSerializer();
+    let result = '';
+    for (let i = 0; i < container.childNodes.length; i++) {
+        result += serializer.serializeToString(container.childNodes[i]);
+    }
+    return result.replace(/ xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g, '');
 }
 
 /**

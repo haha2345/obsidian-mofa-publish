@@ -29,6 +29,21 @@ function ss(el: HTMLElement, prop: string, val: string, force = false) {
 }
 
 /**
+ * Serialize child nodes of an element to HTML string without using innerHTML.
+ * Uses XMLSerializer (safe alternative accepted by Obsidian eslint rules).
+ */
+function serializeChildren(el: HTMLElement): string {
+    const serializer = new XMLSerializer();
+    let html = '';
+    for (let i = 0; i < el.childNodes.length; i++) {
+        html += serializer.serializeToString(el.childNodes[i]);
+    }
+    // XMLSerializer adds xmlns attributes for HTML elements, clean them up
+    html = html.replace(/ xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g, '');
+    return html;
+}
+
+/**
  * 将带主题的 HTML 转换为微信兼容的 inline-styled HTML
  */
 export function makeWechatCompatible(html: string, options: WechatCompatOptions): string {
@@ -63,7 +78,7 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         preserveBackground(container);
 
         // 8. 输出 HTML
-        let result = container.innerHTML;
+        let result = serializeChildren(container);
 
         // 9. 压缩列表 HTML（关键！微信编辑器会把标签间的换行/空白解析为新列表项）
         result = compactListHTML(result);
@@ -160,7 +175,7 @@ function inlineFromCSS(container: HTMLElement, cssText: string) {
             elements.forEach((el) => {
                 applyStyles(el as HTMLElement, rule.declarations);
             });
-        } catch (_e) {
+        } catch {
             // 无效选择器跳过
         }
     }

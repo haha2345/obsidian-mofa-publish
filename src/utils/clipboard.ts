@@ -62,7 +62,7 @@ function copyRichTextFallback(html: string): boolean {
         selection.addRange(range);
     }
 
-    // eslint-disable-next-line -- execCommand is the only fallback for rich text copy
+    // eslint-disable-next-line deprecation/deprecation -- execCommand is the only fallback for rich text copy
     const success = document.execCommand('copy');
 
     if (selection) {

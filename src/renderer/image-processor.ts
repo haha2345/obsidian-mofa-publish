@@ -48,7 +48,12 @@ export async function processImagesForCopy(html: string, app: App, sourcePath: s
         }
     }
 
-    return container.innerHTML;
+    const serializer = new XMLSerializer();
+    let result = '';
+    for (let i = 0; i < container.childNodes.length; i++) {
+        result += serializer.serializeToString(container.childNodes[i]);
+    }
+    return result.replace(/ xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g, '');
 }
 
 /**
