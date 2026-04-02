@@ -286,12 +286,16 @@ export class MofaPublishView extends ItemView {
             const themeCSS = theme?.css || '';
 
             // 4. 包装为文章结构
-            const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+            let articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
 
-            // 5. 应用主题样式到预览（预览时不 inline 化，保持可读性）
-            // KaTeX CSS 通过 CDN 引入，确保数学公式正常展示
+            // 4.5 替换 <hr> 为 SVG 装饰分割线（预览中也要显示）
+            articleHtml = this.replaceDividers(articleHtml);
+
+            // 5. 应用主题样式到预览
             const katexCSS = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">`;
-            this.previewEl.innerHTML = `${katexCSS}<style>${themeCSS}</style>${articleHtml}`;
+            // 基础保护样式：防止图片溢出
+            const baseCss = `.mofa-article { overflow: hidden; box-sizing: border-box; } .mofa-article img { max-width: 100% !important; height: auto !important; }`;
+            this.previewEl.innerHTML = `${katexCSS}<style>${baseCss}\n${themeCSS}</style>${articleHtml}`;
 
             // 保存原始 HTML 用于复制
             this.currentHtml = articleHtml;
@@ -567,6 +571,25 @@ export class MofaPublishView extends ItemView {
             console.warn(`读取图片失败 (${src}):`, error);
             return null;
         }
+    }
+
+    /**
+     * 将 <hr> 替换为 SVG 装饰分割线
+     */
+    private replaceDividers(html: string): string {
+        const svgDividers = [
+            `<section style="text-align:center;margin:1.5em 0;line-height:0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 30" style="width:80%;height:30px;"><path d="M0,15 Q75,0 150,15 T300,15 T450,15 T600,15" fill="none" stroke="#ccc" stroke-width="1.5" opacity="0.5"/></svg></section>`,
+            `<section style="text-align:center;margin:1.5em 0;line-height:0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 20" style="width:80%;height:20px;"><line x1="0" y1="10" x2="260" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/><polygon points="300,2 308,10 300,18 292,10" fill="#ccc" opacity="0.4"/><line x1="340" y1="10" x2="600" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/></svg></section>`,
+            `<section style="text-align:center;margin:1.5em 0;line-height:0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 10" style="width:60px;height:16px;"><circle cx="20" cy="5" r="3" fill="#ccc" opacity="0.4"/><circle cx="50" cy="5" r="3" fill="#ccc" opacity="0.6"/><circle cx="80" cy="5" r="3" fill="#ccc" opacity="0.4"/></svg></section>`,
+            `<section style="text-align:center;margin:1.5em 0;line-height:0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 24" style="width:80%;height:24px;"><line x1="0" y1="12" x2="250" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/><path d="M290,12 Q300,2 310,12 Q300,22 290,12Z" fill="#ccc" opacity="0.35"/><line x1="350" y1="12" x2="600" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/></svg></section>`,
+        ];
+
+        let index = 0;
+        return html.replace(/<hr\s*\/?>/gi, () => {
+            const svg = svgDividers[index % svgDividers.length];
+            index++;
+            return svg;
+        });
     }
 
     private setStatus(text: string) {
