@@ -1,6 +1,6 @@
 {
   "id": "mofa-publish",
-  "name": "墨发 MoFa Publish",
+  "name": "MoFa Publish",
   "version": "1.0.0",
   "minAppVersion": "1.4.0",
   "description": "一键排版发布 Markdown 到微信公众号，精美排版，小白也能用!",
