@@ -42,6 +42,9 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         // 6. 处理行内元素
         processInlineElements(container);
 
+        // 6.5 将 <hr> 替换为 SVG 装饰分割线
+        processDividers(container);
+
         // 7. 背景色保留（微信编辑器会剥离最外层背景，用 section 包裹保留）
         preserveBackground(container);
 
@@ -428,3 +431,30 @@ function processInlineElements(container: HTMLElement) {
     });
 }
 
+/**
+ * 将 <hr> 替换为 SVG 装饰分割线
+ * 每篇文章中的分割线交替使用不同样式
+ */
+function processDividers(container: HTMLElement) {
+    const svgDividers = [
+        // 波浪
+        `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 30" style="width:80%;height:30px;display:inline-block;"><path d="M0,15 Q75,0 150,15 T300,15 T450,15 T600,15" fill="none" stroke="#ccc" stroke-width="1.5" opacity="0.5"/></svg></section>`,
+        // 菱形
+        `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 20" style="width:80%;height:20px;display:inline-block;"><line x1="0" y1="10" x2="260" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/><polygon points="300,2 308,10 300,18 292,10" fill="#ccc" opacity="0.4"/><line x1="340" y1="10" x2="600" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/></svg></section>`,
+        // 三圆点
+        `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 10" style="width:60%;height:16px;display:inline-block;"><circle cx="270" cy="5" r="3" fill="#ccc" opacity="0.4"/><circle cx="300" cy="5" r="3" fill="#ccc" opacity="0.6"/><circle cx="330" cy="5" r="3" fill="#ccc" opacity="0.4"/></svg></section>`,
+        // 树叶
+        `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 24" style="width:80%;height:24px;display:inline-block;"><line x1="0" y1="12" x2="250" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/><path d="M290,12 Q300,2 310,12 Q300,22 290,12Z" fill="#ccc" opacity="0.35"/><line x1="350" y1="12" x2="600" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/></svg></section>`,
+    ];
+
+    const hrs = container.querySelectorAll('hr');
+    hrs.forEach((hr, index) => {
+        const svgHtml = svgDividers[index % svgDividers.length];
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = svgHtml;
+        const svgSection = wrapper.firstChild as HTMLElement;
+        if (svgSection) {
+            hr.replaceWith(svgSection);
+        }
+    });
+}

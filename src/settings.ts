@@ -214,16 +214,26 @@ export class MofaSettingTab extends PluginSettingTab {
         containerEl.createEl('h2', { text: '🎨 高级设置' });
 
         new Setting(containerEl)
-            .setName('自定义 CSS 笔记')
-            .setDesc('指定一篇包含自定义 CSS 的笔记名称，留空则不使用')
+            .setName('自定义主题笔记')
+            .setDesc('指定一篇包含自定义 CSS 主题的笔记名（不含 .md 后缀），主题将出现在主题下拉列表中')
             .addText((text) =>
                 text
-                    .setPlaceholder('例如：我的公众号样式')
+                    .setPlaceholder('例如：我的公众号主题')
                     .setValue(this.plugin.settings.customCssNote)
                     .onChange(async (value) => {
                         this.plugin.settings.customCssNote = value;
                         await this.plugin.saveSettings();
                     })
             );
+
+        // 自定义主题格式说明
+        const themeHelpEl = containerEl.createEl('details');
+        themeHelpEl.createEl('summary', { text: '📝 如何创建自定义主题？' });
+        const themeHelpContent = themeHelpEl.createEl('div', { cls: 'mofa-help-content' });
+        themeHelpContent.createEl('p', { text: '在 Vault 中新建一篇笔记，添加 CSS 代码块：' });
+        themeHelpContent.createEl('pre').createEl('code', {
+            text: '```css title="我的主题"\n.mofa-article {\n    color: #333;\n    background-color: #f9f9f9;\n    padding: 20px;\n}\n.mofa-article h2 {\n    color: #e65100;\n    border-left: 4px solid #e65100;\n    padding-left: 12px;\n}\n```',
+        });
+        themeHelpContent.createEl('p', { text: '💡 一篇笔记内可放多个代码块，每个都会显示为独立主题。' });
     }
 }

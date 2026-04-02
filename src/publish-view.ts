@@ -10,7 +10,7 @@ import { makeWechatCompatible } from './renderer/wechat-compat';
 import { processMermaidBlocks } from './renderer/mermaid-renderer';
 import { processImagesForCopy } from './renderer/image-processor';
 import { copyRichTextToClipboard } from './utils/clipboard';
-import { getBuiltinThemes, getThemeById } from './themes/theme-manager';
+import { getBuiltinThemes, getThemeById, parseExternalTheme, Theme } from './themes/theme-manager';
 
 export const MOFA_VIEW_TYPE = 'mofa-publish-view';
 
@@ -55,14 +55,11 @@ export class MofaPublishView extends ItemView {
         themeBar.createEl('span', { text: '🎨 主题', cls: 'mofa-label' });
 
         this.themeSelect = themeBar.createEl('select', { cls: 'mofa-theme-select' });
-        const themes = getBuiltinThemes();
-        themes.forEach((theme) => {
-            const opt = this.themeSelect!.createEl('option', { text: theme.name, value: theme.id });
-            if (theme.id === this.plugin.settings.defaultTheme) {
-                opt.selected = true;
-            }
-        });
+        await this.loadThemeOptions();
         this.themeSelect.addEventListener('change', () => {
+            // 记住选中的主题
+            this.plugin.settings.defaultTheme = this.themeSelect!.value;
+            this.plugin.saveSettings();
             this.refreshPreview();
         });
 
@@ -151,6 +148,100 @@ export class MofaPublishView extends ItemView {
         if (this.refreshTimer) clearTimeout(this.refreshTimer);
     }
 
+    /** 外部导入的主题缓存 */
+    private externalThemes: Theme[] = [];
+
+    /**
+     * 加载主题下拉选项（内置 + 外部导入）
+     */
+    private async loadThemeOptions() {
+        if (!this.themeSelect) return;
+        this.themeSelect.empty();
+
+        const savedThemeId = this.plugin.settings.defaultTheme;
+
+        // 内置主题
+        const builtinThemes = getBuiltinThemes();
+        builtinThemes.forEach((theme) => {
+            const opt = this.themeSelect!.createEl('option', { text: theme.name, value: theme.id });
+            if (theme.id === savedThemeId) opt.selected = true;
+        });
+
+        // 加载外部主题
+        this.externalThemes = await this.loadExternalThemes();
+        if (this.externalThemes.length > 0) {
+            // 添加分隔 optgroup
+            const group = this.themeSelect.createEl('optgroup', { attr: { label: '── 自定义主题 ──' } });
+            this.externalThemes.forEach((theme) => {
+                const opt = group.createEl('option', { text: theme.name, value: theme.id });
+                if (theme.id === savedThemeId) opt.selected = true;
+            });
+        }
+    }
+
+    /**
+     * 从 vault 笔记中加载外部主题
+     * 支持在设置中指定一个笔记名，笔记中的 ```css 代码块会被解析为主题
+     */
+    private async loadExternalThemes(): Promise<Theme[]> {
+        const themes: Theme[] = [];
+        const noteName = this.plugin.settings.customCssNote;
+        if (!noteName) return themes;
+
+        // 在 vault 中查找该笔记
+        const files = this.app.vault.getMarkdownFiles();
+        const matchedFile = files.find(f =>
+            f.basename === noteName || f.path === noteName || f.path === noteName + '.md'
+        );
+
+        if (matchedFile) {
+            const content = await this.app.vault.read(matchedFile);
+
+            // 支持多个代码块，每个作为一个独立主题
+            // 格式: ```css title="主题名称"  或直接 ```css
+            const codeBlockRegex = /```css(?:\s+title="([^"]*)")?\s*\n([\s\S]*?)```/g;
+            let match;
+            let index = 0;
+            while ((match = codeBlockRegex.exec(content)) !== null) {
+                const name = match[1] || `自定义主题 ${index + 1}`;
+                const css = match[2].trim();
+                if (css) {
+                    const theme = parseExternalTheme(css, name);
+                    if (theme) {
+                        theme.id = `external_${index}`;
+                        themes.push(theme);
+                        index++;
+                    }
+                }
+            }
+
+            // 如果没有代码块，则将整个文件作为一个 CSS 主题
+            if (themes.length === 0 && content.trim()) {
+                const theme = parseExternalTheme(content, noteName);
+                if (theme) {
+                    theme.id = 'external_0';
+                    themes.push(theme);
+                }
+            }
+        }
+
+        return themes;
+    }
+
+    /**
+     * 获取当前选中的主题（内置或外部）
+     */
+    private getSelectedTheme(): Theme | undefined {
+        const selectedId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
+
+        // 先找内置主题
+        const builtin = getThemeById(selectedId);
+        if (builtin) return builtin;
+
+        // 再找外部主题
+        return this.externalThemes.find(t => t.id === selectedId);
+    }
+
     private updatePreviewSize() {
         if (!this.previewEl) return;
         if (this.previewMode === 'mobile') {
@@ -191,8 +282,7 @@ export class MofaPublishView extends ItemView {
             const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
 
             // 3. 获取主题 CSS
-            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
-            const theme = getThemeById(selectedThemeId);
+            const theme = this.getSelectedTheme();
             const themeCSS = theme?.css || '';
 
             // 4. 包装为文章结构
@@ -233,8 +323,7 @@ export class MofaPublishView extends ItemView {
             const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
 
             // 获取主题
-            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
-            const theme = getThemeById(selectedThemeId);
+            const theme = this.getSelectedTheme();
             const themeCSS = theme?.css || '';
 
             const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
@@ -296,8 +385,7 @@ export class MofaPublishView extends ItemView {
             const rawHtml = this.renderer.render(content, activeFile.path);
             const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
 
-            const selectedThemeId = this.themeSelect?.value || this.plugin.settings.defaultTheme;
-            const theme = getThemeById(selectedThemeId);
+            const theme = this.getSelectedTheme();
             const themeCSS = theme?.css || '';
 
             const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
