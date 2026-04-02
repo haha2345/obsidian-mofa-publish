@@ -53,7 +53,7 @@ export class MarkdownRenderer {
                 try {
                     const result = hljs.highlightAuto(str);
                     return this.wrapCodeBlock(result.value, result.language || '');
-                } catch (e) {
+                } catch (_e) {
                     return this.wrapCodeBlock(this.escapeHtml(str), '');
                 }
             },

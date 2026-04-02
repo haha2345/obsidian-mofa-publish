@@ -81,7 +81,7 @@ export async function wxGetToken(appId: string, appSecret: string): Promise<stri
     const res = await requestUrl({ url, method: 'GET', throw: false });
     const data = res.json;
 
-    console.log('微信 API 返回:', JSON.stringify(data));
+    console.debug('微信 API 返回:', JSON.stringify(data));
 
     if (data.errcode) {
         let errMsg = getErrorMessage(data.errcode);

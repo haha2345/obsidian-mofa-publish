@@ -7,6 +7,10 @@
  * 2. 列表 DOM 重塑（防止微信中塌陷）
  * 3. 表格兼容处理
  * 4. 图片处理
+ *
+ * NOTE: This file intentionally uses inline styles via style.setProperty()
+ * because WeChat strips <style> tags and CSS classes — inline styles are the
+ * ONLY way to deliver styled content to WeChat's editor.
  */
 
 export interface WechatCompatOptions {
@@ -15,12 +19,22 @@ export interface WechatCompatOptions {
 }
 
 /**
+ * Helper: set a CSS property on an element (avoids direct style.xxx = assignment)
+ * If `force` is false (default), only sets the property if it's not already set.
+ */
+function ss(el: HTMLElement, prop: string, val: string, force = false) {
+    if (force || !el.style.getPropertyValue(prop)) {
+        el.style.setProperty(prop, val);
+    }
+}
+
+/**
  * 将带主题的 HTML 转换为微信兼容的 inline-styled HTML
  */
 export function makeWechatCompatible(html: string, options: WechatCompatOptions): string {
-    const container = document.createElement('div');
-    container.className = 'mofa-render-container';
-    container.innerHTML = html;
+    const doc = new DOMParser().parseFromString(`<div class="mofa-render-container">${html}</div>`, 'text/html');
+    const container = doc.body.querySelector('.mofa-render-container') as HTMLElement;
+    if (!container) return html;
 
     try {
         // 1. 解析主题 CSS 并直接 inline 到匹配元素
@@ -64,16 +78,11 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
 /**
  * 压缩列表相关 HTML，移除标签之间的空白
  * 这是解决微信编辑器"幽灵列表项"的核心修复
- * 
- * 原因：markdown-it 生成的列表 HTML 包含换行和空格：
- *   <ol>\n<li>\n<p>内容</p>\n</li>\n<li>...
- * 浏览器预览时会忽略这些空白，但微信编辑器会把它们解析为额外的空列表项
  */
 function compactListHTML(html: string): string {
-    // 1. 去掉 <li> 内的 <p> 包裹（松散列表产生的，微信不需要）
-    //    <li><p>内容</p></li> → <li>内容</li>
+    // 1. 去掉 <li> 内的 <p> 包裹
     html = html.replace(/<li([^>]*)>\s*<p([^>]*)>([\s\S]*?)<\/p>\s*<\/li>/gi, 
-        (match, liAttr, pAttr, content) => `<li${liAttr}>${content.trim()}</li>`);
+        (_match, liAttr, _pAttr, content: string) => `<li${liAttr}>${content.trim()}</li>`);
 
     // 2. 压缩 ul/ol 和 li 之间的所有空白
     html = html.replace(/<ul([^>]*)>\s+/gi, '<ul$1>');
@@ -96,32 +105,27 @@ function compactListHTML(html: string): string {
 
 /**
  * 保留背景色：微信编辑器会覆盖最外层 div 的背景
- * 解决方案：用 <section> 包裹内容，微信会保留 section 的背景色
  */
 function preserveBackground(container: HTMLElement) {
     const articleEl = container.querySelector('.mofa-article') as HTMLElement;
     if (!articleEl) return;
 
-    const bgColor = articleEl.style.backgroundColor;
+    const bgColor = articleEl.style.getPropertyValue('background-color');
     if (!bgColor || bgColor === 'transparent' || bgColor === '#fff' || bgColor === '#ffffff' || bgColor === 'rgb(255, 255, 255)') {
-        return; // 白色背景不需要特殊处理
+        return;
     }
 
-    // 给 .mofa-article 内的每个直接子元素添加背景色
-    // 这样即使微信剥离了外层背景，每个段落的背景仍然保留
     const children = articleEl.children;
     for (let i = 0; i < children.length; i++) {
         const child = children[i] as HTMLElement;
-        if (!child.style.backgroundColor) {
-            child.style.backgroundColor = bgColor;
+        if (!child.style.getPropertyValue('background-color')) {
+            child.style.setProperty('background-color', bgColor);
         }
     }
 
-    // 也给整体包一层 section
     const section = document.createElement('section');
-    section.style.backgroundColor = bgColor;
-    section.style.padding = articleEl.style.padding || '20px';
-    // 把 articleEl 的所有子元素移入 section
+    section.style.setProperty('background-color', bgColor);
+    section.style.setProperty('padding', articleEl.style.getPropertyValue('padding') || '20px');
     while (articleEl.firstChild) {
         section.appendChild(articleEl.firstChild);
     }
@@ -130,44 +134,34 @@ function preserveBackground(container: HTMLElement) {
 
 /**
  * 解析 CSS 文本并将样式直接 inline 到匹配的元素上
- * 这是微信兼容的核心——微信会剥离 <style>，所以必须内联
  */
 function inlineFromCSS(container: HTMLElement, cssText: string) {
-    // 解析 CSS 规则：提取 selector { ... } 对
     const rules = parseCSSRules(cssText);
 
     for (const rule of rules) {
-        // 将 .mofa-article 选择器替换为容器内可查询的选择器
-        // 例如 ".mofa-article h2" → "h2"（在 container 内查找）
-        // ".mofa-article" 本身 → 直接应用到 .mofa-article div
         let selector = rule.selector.trim();
 
         try {
-            // 处理 .mofa-article 自身的样式
             if (selector === '.mofa-article') {
                 const articleEl = container.querySelector('.mofa-article') || container;
                 applyStyles(articleEl as HTMLElement, rule.declarations);
                 continue;
             }
 
-            // 去掉 .mofa-article 前缀
             if (selector.startsWith('.mofa-article ')) {
                 selector = selector.replace('.mofa-article ', '');
             }
 
-            // 跳过伪元素（微信不支持）
             if (selector.includes('::') || selector.includes(':before') || selector.includes(':after')) {
                 continue;
             }
 
-            // 查找匹配元素并 inline 样式
             const elements = container.querySelectorAll(selector);
             elements.forEach((el) => {
                 applyStyles(el as HTMLElement, rule.declarations);
             });
-        } catch (e) {
+        } catch (_e) {
             // 无效选择器跳过
-            console.warn('CSS 选择器解析失败:', selector, e);
         }
     }
 }
@@ -178,10 +172,8 @@ function inlineFromCSS(container: HTMLElement, cssText: string) {
 function parseCSSRules(cssText: string): Array<{ selector: string; declarations: string }> {
     const rules: Array<{ selector: string; declarations: string }> = [];
 
-    // 移除注释
     cssText = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
 
-    // 用正则提取 selector { declarations }
     const ruleRegex = /([^{}]+)\{([^{}]+)\}/g;
     let match;
     while ((match = ruleRegex.exec(cssText)) !== null) {
@@ -202,7 +194,6 @@ function applyStyles(el: HTMLElement, declarations: string) {
     const existing = el.getAttribute('style') || '';
     const existingMap = parseInlineStyle(existing);
 
-    // 解析新声明
     const props = declarations.split(';').filter(s => s.trim());
     for (const prop of props) {
         const colonIndex = prop.indexOf(':');
@@ -210,24 +201,19 @@ function applyStyles(el: HTMLElement, declarations: string) {
         const name = prop.slice(0, colonIndex).trim();
         const value = prop.slice(colonIndex + 1).trim();
 
-        // 跳过微信不支持的属性
         if (name.startsWith('-webkit-background-clip') || name === 'background-clip') {
-            // 微信不支持 background-clip: text，转为普通颜色
             continue;
         }
         if (name === '-webkit-text-fill-color') {
-            // 转为普通 color
             existingMap['color'] = value;
             continue;
         }
 
-        // 不覆盖已有的 inline style（更具体的样式优先）
         if (!existingMap[name]) {
             existingMap[name] = value;
         }
     }
 
-    // 重新序列化
     const styleStr = Object.entries(existingMap)
         .map(([k, v]) => `${k}: ${v}`)
         .join('; ');
@@ -255,31 +241,17 @@ function parseInlineStyle(style: string): Record<string, string> {
 }
 
 /**
- * 批量处理指定标签（保留用于列表等非主题处理）
- */
-function processElements(container: HTMLElement, tag: string, styleFn: (el: HTMLElement) => void) {
-    container.querySelectorAll(tag).forEach((el) => {
-        styleFn(el as HTMLElement);
-    });
-}
-
-/**
  * 列表 DOM 重塑（微信兼容）
  */
 function processLists(container: HTMLElement) {
-    // 强力清理所有空的 <li> 元素
-    // markdown-it breaks:true 会产生各种形式的空 li：
-    // <li></li>, <li><br></li>, <li><p></p></li>, <li><p><br></p></li>, <li>\n</li>
     container.querySelectorAll('li').forEach((li) => {
         const liEl = li as HTMLElement;
-        // 检查是否有实质内容
         const text = liEl.textContent?.trim() || '';
         const hasMedia = liEl.querySelector('img, input, pre, code, table, svg');
         if (!text && !hasMedia) {
             liEl.remove();
             return;
         }
-        // 额外检查：只包含空 <p> 标签的情况
         const children = liEl.children;
         if (children.length === 1 && children[0].tagName === 'P') {
             const pText = children[0].textContent?.trim() || '';
@@ -290,45 +262,42 @@ function processLists(container: HTMLElement) {
         }
     });
 
-    // 处理无序列表
     container.querySelectorAll('ul').forEach((ul) => {
         const ulEl = ul as HTMLElement;
-        if (!ulEl.style.paddingLeft) ulEl.style.paddingLeft = '2em';
-        if (!ulEl.style.marginBottom) ulEl.style.marginBottom = '1em';
+        ss(ulEl, 'padding-left', '2em');
+        ss(ulEl, 'margin-bottom', '1em');
 
         ulEl.querySelectorAll(':scope > li').forEach((li) => {
             const liEl = li as HTMLElement;
-            if (!liEl.style.marginBottom) liEl.style.marginBottom = '0.5em';
-            if (!liEl.style.lineHeight) liEl.style.lineHeight = '1.8';
+            ss(liEl, 'margin-bottom', '0.5em');
+            ss(liEl, 'line-height', '1.8');
         });
     });
 
-    // 处理有序列表
     container.querySelectorAll('ol').forEach((ol) => {
         const olEl = ol as HTMLElement;
-        if (!olEl.style.paddingLeft) olEl.style.paddingLeft = '2em';
-        if (!olEl.style.marginBottom) olEl.style.marginBottom = '1em';
+        ss(olEl, 'padding-left', '2em');
+        ss(olEl, 'margin-bottom', '1em');
 
         olEl.querySelectorAll(':scope > li').forEach((li) => {
             const liEl = li as HTMLElement;
-            if (!liEl.style.marginBottom) liEl.style.marginBottom = '0.5em';
-            if (!liEl.style.lineHeight) liEl.style.lineHeight = '1.8';
+            ss(liEl, 'margin-bottom', '0.5em');
+            ss(liEl, 'line-height', '1.8');
         });
     });
 
-    // 处理任务列表
     container.querySelectorAll('.task-list-item').forEach((li) => {
         const liEl = li as HTMLElement;
-        liEl.style.listStyleType = 'none';
-        liEl.style.marginLeft = '-1.5em';
+        ss(liEl, 'list-style-type', 'none', true);
+        ss(liEl, 'margin-left', '-1.5em', true);
 
         const checkbox = liEl.querySelector('input[type="checkbox"]') as HTMLInputElement;
         if (checkbox) {
             const isChecked = checkbox.checked;
             const icon = document.createElement('span');
             icon.textContent = isChecked ? '☑' : '☐';
-            icon.style.marginRight = '0.5em';
-            icon.style.fontSize = '1.1em';
+            ss(icon, 'margin-right', '0.5em', true);
+            ss(icon, 'font-size', '1.1em', true);
             checkbox.replaceWith(icon);
         }
     });
@@ -342,28 +311,28 @@ function processTables(container: HTMLElement) {
         const tableEl = table as HTMLElement;
 
         const wrapper = document.createElement('section');
-        wrapper.style.overflowX = 'auto';
-        wrapper.style.marginBottom = '1em';
+        ss(wrapper, 'overflow-x', 'auto', true);
+        ss(wrapper, 'margin-bottom', '1em', true);
         tableEl.parentNode?.insertBefore(wrapper, tableEl);
         wrapper.appendChild(tableEl);
 
-        if (!tableEl.style.width) tableEl.style.width = '100%';
-        tableEl.style.borderCollapse = 'collapse';
-        if (!tableEl.style.fontSize) tableEl.style.fontSize = '14px';
+        ss(tableEl, 'width', '100%');
+        ss(tableEl, 'border-collapse', 'collapse', true);
+        ss(tableEl, 'font-size', '14px');
 
         tableEl.querySelectorAll('th').forEach((th) => {
             const thEl = th as HTMLElement;
-            if (!thEl.style.padding) thEl.style.padding = '8px 12px';
-            if (!thEl.style.border) thEl.style.border = '1px solid #dfe2e5';
-            if (!thEl.style.backgroundColor) thEl.style.backgroundColor = '#f6f8fa';
-            if (!thEl.style.fontWeight) thEl.style.fontWeight = '600';
-            if (!thEl.style.textAlign) thEl.style.textAlign = 'left';
+            ss(thEl, 'padding', '8px 12px');
+            ss(thEl, 'border', '1px solid #dfe2e5');
+            ss(thEl, 'background-color', '#f6f8fa');
+            ss(thEl, 'font-weight', '600');
+            ss(thEl, 'text-align', 'left');
         });
 
         tableEl.querySelectorAll('td').forEach((td) => {
             const tdEl = td as HTMLElement;
-            if (!tdEl.style.padding) tdEl.style.padding = '8px 12px';
-            if (!tdEl.style.border) tdEl.style.border = '1px solid #dfe2e5';
+            ss(tdEl, 'padding', '8px 12px');
+            ss(tdEl, 'border', '1px solid #dfe2e5');
         });
     });
 }
@@ -374,23 +343,23 @@ function processTables(container: HTMLElement) {
 function processCodeBlocks(container: HTMLElement) {
     container.querySelectorAll('pre.mofa-code-block').forEach((pre) => {
         const preEl = pre as HTMLElement;
-        if (!preEl.style.backgroundColor) preEl.style.backgroundColor = '#1e1e1e';
-        if (!preEl.style.color) preEl.style.color = '#d4d4d4';
-        preEl.style.padding = '16px';
-        preEl.style.borderRadius = '8px';
-        preEl.style.overflow = 'auto';
-        if (!preEl.style.fontSize) preEl.style.fontSize = '13px';
-        preEl.style.lineHeight = '1.6';
-        preEl.style.marginBottom = '1em';
+        ss(preEl, 'background-color', '#1e1e1e');
+        ss(preEl, 'color', '#d4d4d4');
+        ss(preEl, 'padding', '16px', true);
+        ss(preEl, 'border-radius', '8px', true);
+        ss(preEl, 'overflow', 'auto', true);
+        ss(preEl, 'font-size', '13px');
+        ss(preEl, 'line-height', '1.6', true);
+        ss(preEl, 'margin-bottom', '1em', true);
     });
 
     container.querySelectorAll(':not(pre) > code').forEach((code) => {
         const codeEl = code as HTMLElement;
-        if (!codeEl.style.backgroundColor) codeEl.style.backgroundColor = 'rgba(175, 184, 193, 0.2)';
-        if (!codeEl.style.padding) codeEl.style.padding = '2px 6px';
-        if (!codeEl.style.borderRadius) codeEl.style.borderRadius = '4px';
-        if (!codeEl.style.fontSize) codeEl.style.fontSize = '0.9em';
-        if (!codeEl.style.fontFamily) codeEl.style.fontFamily = '"SF Mono", "Fira Code", Menlo, monospace';
+        ss(codeEl, 'background-color', 'rgba(175, 184, 193, 0.2)');
+        ss(codeEl, 'padding', '2px 6px');
+        ss(codeEl, 'border-radius', '4px');
+        ss(codeEl, 'font-size', '0.9em');
+        ss(codeEl, 'font-family', '"SF Mono", "Fira Code", Menlo, monospace');
     });
 }
 
@@ -400,10 +369,10 @@ function processCodeBlocks(container: HTMLElement) {
 function processImages(container: HTMLElement) {
     container.querySelectorAll('img').forEach((img) => {
         const imgEl = img as HTMLElement;
-        if (!imgEl.style.maxWidth) imgEl.style.maxWidth = '100%';
-        imgEl.style.height = 'auto';
-        if (!imgEl.style.display) imgEl.style.display = 'block';
-        if (!imgEl.style.margin) imgEl.style.margin = '1em auto';
+        ss(imgEl, 'max-width', '100%');
+        ss(imgEl, 'height', 'auto', true);
+        ss(imgEl, 'display', 'block');
+        ss(imgEl, 'margin', '1em auto');
     });
 }
 
@@ -412,47 +381,42 @@ function processImages(container: HTMLElement) {
  */
 function processInlineElements(container: HTMLElement) {
     container.querySelectorAll('strong').forEach((el) => {
-        const htmlEl = el as HTMLElement;
-        if (!htmlEl.style.fontWeight) htmlEl.style.fontWeight = '700';
+        ss(el as HTMLElement, 'font-weight', '700');
     });
 
     container.querySelectorAll('em').forEach((el) => {
-        (el as HTMLElement).style.fontStyle = 'italic';
+        ss(el as HTMLElement, 'font-style', 'italic', true);
     });
 
     container.querySelectorAll('del').forEach((el) => {
-        (el as HTMLElement).style.textDecoration = 'line-through';
-        if (!(el as HTMLElement).style.color) (el as HTMLElement).style.color = '#999';
+        const htmlEl = el as HTMLElement;
+        ss(htmlEl, 'text-decoration', 'line-through', true);
+        ss(htmlEl, 'color', '#999');
     });
 
     container.querySelectorAll('mark').forEach((el) => {
-        if (!(el as HTMLElement).style.backgroundColor) (el as HTMLElement).style.backgroundColor = 'rgba(255, 208, 0, 0.4)';
-        (el as HTMLElement).style.padding = '2px 4px';
+        const htmlEl = el as HTMLElement;
+        ss(htmlEl, 'background-color', 'rgba(255, 208, 0, 0.4)');
+        ss(htmlEl, 'padding', '2px 4px', true);
     });
 }
 
 /**
  * 将 <hr> 替换为 SVG 装饰分割线
- * 每篇文章中的分割线交替使用不同样式
  */
 function processDividers(container: HTMLElement) {
     const svgDividers = [
-        // 波浪
         `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 30" style="width:80%;height:30px;display:inline-block;"><path d="M0,15 Q75,0 150,15 T300,15 T450,15 T600,15" fill="none" stroke="#ccc" stroke-width="1.5" opacity="0.5"/></svg></section>`,
-        // 菱形
         `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 20" style="width:80%;height:20px;display:inline-block;"><line x1="0" y1="10" x2="260" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/><polygon points="300,2 308,10 300,18 292,10" fill="#ccc" opacity="0.4"/><line x1="340" y1="10" x2="600" y2="10" stroke="#ccc" stroke-width="0.8" opacity="0.4"/></svg></section>`,
-        // 三圆点
         `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 10" style="width:60%;height:16px;display:inline-block;"><circle cx="270" cy="5" r="3" fill="#ccc" opacity="0.4"/><circle cx="300" cy="5" r="3" fill="#ccc" opacity="0.6"/><circle cx="330" cy="5" r="3" fill="#ccc" opacity="0.4"/></svg></section>`,
-        // 树叶
         `<section style="text-align:center;margin:1.5em 0;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 24" style="width:80%;height:24px;display:inline-block;"><line x1="0" y1="12" x2="250" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/><path d="M290,12 Q300,2 310,12 Q300,22 290,12Z" fill="#ccc" opacity="0.35"/><line x1="350" y1="12" x2="600" y2="12" stroke="#ccc" stroke-width="0.6" opacity="0.3"/></svg></section>`,
     ];
 
     const hrs = container.querySelectorAll('hr');
     hrs.forEach((hr, index) => {
         const svgHtml = svgDividers[index % svgDividers.length];
-        const wrapper = document.createElement('div');
-        wrapper.innerHTML = svgHtml;
-        const svgSection = wrapper.firstChild as HTMLElement;
+        const tmpDoc = new DOMParser().parseFromString(svgHtml, 'text/html');
+        const svgSection = tmpDoc.body.firstChild as HTMLElement;
         if (svgSection) {
             hr.replaceWith(svgSection);
         }

@@ -12,7 +12,7 @@
  * 参考：https://github.com/sunbooshi/note-to-mp (MIT License)
  */
 
-import { App, MarkdownRenderer, Component, TFile } from 'obsidian';
+import { App, MarkdownRenderer, Component } from 'obsidian';
 import { toPng } from 'html-to-image';
 
 /**
@@ -30,13 +30,9 @@ export async function renderMermaidToPng(
     mermaidCode: string,
     sourcePath: string
 ): Promise<string> {
-    // 创建隐藏容器
+    // 创建隐藏容器 - 使用 CSS class 而非 inline style
     const container = document.createElement('div');
-    container.style.position = 'fixed';
-    container.style.left = '-9999px';
-    container.style.top = '-9999px';
-    container.style.width = '800px';
-    container.style.opacity = '0';
+    container.addClass('mofa-offscreen-render');
     document.body.appendChild(container);
 
     const component = new Component();
@@ -82,8 +78,8 @@ export async function processMermaidBlocks(
     app: App,
     sourcePath: string
 ): Promise<string> {
-    const container = document.createElement('div');
-    container.innerHTML = html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const container = doc.body;
 
     const mermaidBlocks = container.querySelectorAll('.mofa-mermaid');
     if (mermaidBlocks.length === 0) return html;
@@ -102,18 +98,13 @@ export async function processMermaidBlocks(
             const imgEl = document.createElement('img');
             imgEl.src = pngDataUrl;
             imgEl.alt = 'Mermaid 图表';
-            imgEl.style.maxWidth = '100%';
-            imgEl.style.display = 'block';
-            imgEl.style.margin = '1em auto';
+            imgEl.addClass('mofa-mermaid-img');
 
             block.parentNode?.replaceChild(imgEl, block);
         } catch (error) {
             console.error(`Mermaid 块 ${i} 处理失败:`, error);
             const errorEl = document.createElement('p');
-            errorEl.style.color = 'red';
-            errorEl.style.padding = '10px';
-            errorEl.style.border = '1px solid red';
-            errorEl.style.borderRadius = '4px';
+            errorEl.addClass('mofa-mermaid-error');
             errorEl.textContent = `⚠️ Mermaid 图表渲染失败: ${(error as Error).message}`;
             block.parentNode?.replaceChild(errorEl, block);
         }

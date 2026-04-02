@@ -43,7 +43,7 @@ export class MofaSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         // ===== 基础设置 =====
-        containerEl.createEl('h2', { text: '📌 基础设置' });
+        new Setting(containerEl).setName('📌 基础设置').setHeading();
 
         new Setting(containerEl)
             .setName('默认主题')
@@ -111,7 +111,7 @@ export class MofaSettingTab extends PluginSettingTab {
             );
 
         // ===== 公众号设置 =====
-        containerEl.createEl('h2', { text: '📤 公众号设置（可选）' });
+        new Setting(containerEl).setName('📤 公众号设置（可选）').setHeading();
         containerEl.createEl('p', {
             text: '填写后可使用"一键发送到草稿箱"功能。不填也可以使用"复制到公众号"功能。',
             cls: 'setting-item-description',
@@ -211,7 +211,7 @@ export class MofaSettingTab extends PluginSettingTab {
             .parentElement?.createEl('li', { text: '⚠️ 如果 IP 变化（路由器重启等），需要重新查询并更新白名单' });
 
         // ===== 高级设置 =====
-        containerEl.createEl('h2', { text: '🎨 高级设置' });
+        new Setting(containerEl).setName('🎨 高级设置').setHeading();
 
         new Setting(containerEl)
             .setName('自定义主题笔记')

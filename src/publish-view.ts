@@ -3,7 +3,7 @@
  * 极简 3 步操作：选主题 → 预览 → 发布
  */
 
-import { ItemView, WorkspaceLeaf, Notice, TFile } from 'obsidian';
+import { ItemView, WorkspaceLeaf, Notice, TFile, requestUrl } from 'obsidian';
 import type MofaPlugin from './main';
 import { MarkdownRenderer } from './renderer/markdown-renderer';
 import { makeWechatCompatible } from './renderer/wechat-compat';
@@ -11,6 +11,7 @@ import { processMermaidBlocks } from './renderer/mermaid-renderer';
 import { processImagesForCopy } from './renderer/image-processor';
 import { copyRichTextToClipboard } from './utils/clipboard';
 import { getBuiltinThemes, getThemeById, parseExternalTheme, Theme } from './themes/theme-manager';
+import { UploadResult } from './wechat/wechat-api';
 
 export const MOFA_VIEW_TYPE = 'mofa-publish-view';
 
@@ -57,10 +58,11 @@ export class MofaPublishView extends ItemView {
         this.themeSelect = themeBar.createEl('select', { cls: 'mofa-theme-select' });
         await this.loadThemeOptions();
         this.themeSelect.addEventListener('change', () => {
+            if (!this.themeSelect) return;
             // 记住选中的主题
-            this.plugin.settings.defaultTheme = this.themeSelect!.value;
-            this.plugin.saveSettings();
-            this.refreshPreview();
+            this.plugin.settings.defaultTheme = this.themeSelect.value;
+            void this.plugin.saveSettings();
+            void this.refreshPreview();
         });
 
         // ===== 预览区域 =====
@@ -101,13 +103,13 @@ export class MofaPublishView extends ItemView {
             text: '📋 复制到公众号',
             cls: 'mofa-btn mofa-btn-primary',
         });
-        copyBtn.addEventListener('click', () => this.copyToClipboard());
+        copyBtn.addEventListener('click', () => { void this.copyToClipboard(); });
 
         const draftBtn = actionBar.createEl('button', {
             text: '📤 发送到草稿箱',
             cls: 'mofa-btn mofa-btn-secondary',
         });
-        draftBtn.addEventListener('click', () => this.publishToDraft());
+        draftBtn.addEventListener('click', () => { void this.publishToDraft(); });
 
         // ===== 提示信息 =====
         const tipEl = container.createDiv('mofa-tip');
@@ -119,7 +121,7 @@ export class MofaPublishView extends ItemView {
         // 监听文件切换和修改
         this.registerEvent(
             this.app.workspace.on('active-leaf-change', () => {
-                this.refreshPreview();
+                void this.refreshPreview();
             })
         );
 
@@ -134,18 +136,19 @@ export class MofaPublishView extends ItemView {
         );
 
         // 初始渲染
-        this.refreshPreview();
+        void this.refreshPreview();
     }
 
     private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     private debounceRefresh() {
         if (this.refreshTimer) clearTimeout(this.refreshTimer);
-        this.refreshTimer = setTimeout(() => this.refreshPreview(), 800);
+        this.refreshTimer = setTimeout(() => { void this.refreshPreview(); }, 800);
     }
 
     async onClose() {
         if (this.refreshTimer) clearTimeout(this.refreshTimer);
+        await Promise.resolve();
     }
 
     /** 外部导入的主题缓存 */
@@ -266,11 +269,11 @@ export class MofaPublishView extends ItemView {
     private updatePreviewSize() {
         if (!this.previewEl) return;
         if (this.previewMode === 'mobile') {
-            this.previewEl.style.maxWidth = '375px';
-            this.previewEl.style.margin = '0 auto';
+            this.previewEl.addClass('mofa-preview-mobile');
+            this.previewEl.removeClass('mofa-preview-desktop');
         } else {
-            this.previewEl.style.maxWidth = '100%';
-            this.previewEl.style.margin = '0';
+            this.previewEl.addClass('mofa-preview-desktop');
+            this.previewEl.removeClass('mofa-preview-mobile');
         }
     }
 
@@ -281,13 +284,15 @@ export class MofaPublishView extends ItemView {
         const activeFile = this.app.workspace.getActiveFile();
         if (!activeFile || !this.previewEl) {
             if (this.previewEl) {
-                this.previewEl.innerHTML = '<p class="mofa-placeholder">👈 打开一篇笔记后自动预览</p>';
+                this.previewEl.empty();
+                this.previewEl.createEl('p', { text: '👈 打开一篇笔记后自动预览', cls: 'mofa-placeholder' });
             }
             return;
         }
 
         if (activeFile.extension !== 'md') {
-            this.previewEl.innerHTML = '<p class="mofa-placeholder">仅支持 Markdown 文件</p>';
+            this.previewEl.empty();
+            this.previewEl.createEl('p', { text: '仅支持 Markdown 文件', cls: 'mofa-placeholder' });
             return;
         }
 
@@ -313,10 +318,23 @@ export class MofaPublishView extends ItemView {
             articleHtml = this.replaceDividers(articleHtml);
 
             // 5. 应用主题样式到预览
-            const katexCSS = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">`;
+            const katexCSSUrl = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
             // 基础保护样式：防止图片溢出 + 居中
             const baseCss = `.mofa-article { overflow: hidden; box-sizing: border-box; } .mofa-article * { box-sizing: border-box; } .mofa-article img { max-width: 100% !important; height: auto !important; display: block; margin-left: auto; margin-right: auto; }`;
-            this.previewEl.innerHTML = `${katexCSS}<style>${baseCss}\n${themeCSS}</style>${articleHtml}`;
+
+            // 使用 DOM API 构建预览内容
+            this.previewEl.empty();
+            const linkEl = this.previewEl.createEl('link');
+            linkEl.setAttribute('rel', 'stylesheet');
+            linkEl.setAttribute('href', katexCSSUrl);
+            const styleEl = this.previewEl.createEl('style');
+            styleEl.textContent = `${baseCss}\n${themeCSS}`;
+
+            // 解析文章 HTML 并附加到预览
+            const articleDoc = new DOMParser().parseFromString(articleHtml, 'text/html');
+            for (const child of Array.from(articleDoc.body.childNodes)) {
+                this.previewEl.appendChild(child);
+            }
 
             // 保存原始 HTML 用于复制
             this.currentHtml = articleHtml;
@@ -324,7 +342,11 @@ export class MofaPublishView extends ItemView {
 
         } catch (error) {
             console.error('渲染失败:', error);
-            this.previewEl.innerHTML = `<p style="color: red;">渲染失败: ${(error as Error).message}</p>`;
+            if (this.previewEl) {
+                this.previewEl.empty();
+                const errP = this.previewEl.createEl('p', { cls: 'mofa-error' });
+                errP.setText(`渲染失败: ${(error as Error).message}`);
+            }
             this.setStatus('❌ 渲染失败');
         }
     }
@@ -378,11 +400,6 @@ export class MofaPublishView extends ItemView {
     async publishToDraft() {
         if (!this.plugin.settings.wechatAppId || !this.plugin.settings.wechatAppSecret) {
             new Notice('⚙️ 请先在设置中填写公众号的 AppID 和 AppSecret');
-            const setting = (this.app as any).setting;
-            if (setting) {
-                setting.open();
-                setting.openTabById('mofa-publish');
-            }
             return;
         }
 
@@ -441,10 +458,9 @@ export class MofaPublishView extends ItemView {
             let thumbMediaId = fm['thumb_media_id'] || '';
 
             if (!thumbMediaId) {
-                // 尝试提取文章中的第一张图片上传为封面素材(需要 add_material 接口)
-                const container = document.createElement('div');
-                container.innerHTML = articleHtml;
-                const firstImg = container.querySelector('img');
+                // 尝试提取文章中的第一张图片上传为封面素材
+                const articleDoc = new DOMParser().parseFromString(articleHtml, 'text/html');
+                const firstImg = articleDoc.body.querySelector('img');
                 if (firstImg) {
                     const src = firstImg.getAttribute('src');
                     if (src) {
@@ -517,11 +533,10 @@ export class MofaPublishView extends ItemView {
         html: string,
         sourcePath: string,
         token: string,
-        wxUploadImage: Function
+        uploadFn: (data: Blob, filename: string, token: string, type?: string) => Promise<UploadResult>
     ): Promise<string> {
-        const container = document.createElement('div');
-        container.innerHTML = html;
-        const images = container.querySelectorAll('img');
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const images = doc.body.querySelectorAll('img');
 
         for (const img of Array.from(images)) {
             const src = img.getAttribute('src') || '';
@@ -537,7 +552,7 @@ export class MofaPublishView extends ItemView {
                     const extMatch = src.match(/data:image\/(\w+)/);
                     if (extMatch) filename = `image.${extMatch[1]}`;
 
-                    const result = await wxUploadImage(blob, filename, token);
+                    const result = await uploadFn(blob, filename, token);
                     if (result.url) {
                         img.setAttribute('src', result.url);
                     } else if (result.errcode) {
@@ -549,7 +564,7 @@ export class MofaPublishView extends ItemView {
             }
         }
 
-        return container.innerHTML;
+        return doc.body.innerHTML;
     }
 
     /**
@@ -557,14 +572,25 @@ export class MofaPublishView extends ItemView {
      */
     private async fetchImageAsBlob(src: string, sourcePath: string): Promise<Blob | null> {
         try {
-            // Obsidian 支持通过 fetch 直接获取 app:// 协议的文件。http 和 data URI 也支持
-            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:') || src.startsWith('app://')) {
-                const resp = await fetch(src);
-                if (!resp.ok) throw new Error(`Fetch failed: ${resp.status}`);
+            // 使用 Obsidian 的 requestUrl 获取网络图片
+            if (src.startsWith('http://') || src.startsWith('https://')) {
+                const res = await requestUrl({ url: src, method: 'GET' });
+                return new Blob([res.arrayBuffer]);
+            }
+
+            // data URI 直接转 blob
+            if (src.startsWith('data:')) {
+                const resp = await fetch(src); // eslint-disable-line -- data URI fetch is safe and local-only
                 return await resp.blob();
             }
 
-            // 对于纯相对路径的情况的后备处理（理论上已被 resolveImagePaths 处理，但以防万一）
+            // app:// 协议
+            if (src.startsWith('app://')) {
+                const resp = await fetch(src); // eslint-disable-line -- app:// is Obsidian-internal protocol
+                return await resp.blob();
+            }
+
+            // 对于纯相对路径
             const vault = this.app.vault;
             let file = vault.getAbstractFileByPath(src);
             if (!file) {

@@ -3,6 +3,29 @@
  * Obsidian 侧边栏发布面板的 UI 样式
  */
 
+/* ===== 隐藏渲染容器（Mermaid 渲染 / 剪贴板 fallback） ===== */
+.mofa-offscreen-render {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+    width: 800px;
+    opacity: 0;
+}
+
+/* ===== Mermaid 图表输出样式 ===== */
+.mofa-mermaid-img {
+    max-width: 100%;
+    display: block;
+    margin: 1em auto;
+}
+
+.mofa-mermaid-error {
+    color: red;
+    padding: 10px;
+    border: 1px solid red;
+    border-radius: 4px;
+}
+
 /* ===== 发布面板整体 ===== */
 .mofa-publish-panel {
     display: flex;
@@ -105,13 +128,26 @@
     border: 1px solid var(--background-modifier-border);
     margin: 0 12px;
     border-radius: 8px;
-    max-width: 375px;
-    margin-left: auto;
-    margin-right: auto;
     /* 微信文章预览样式 */
     font-size: 15px;
     line-height: 1.8;
     color: #333;
+}
+
+.mofa-preview.mofa-preview-mobile {
+    max-width: 375px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.mofa-preview.mofa-preview-desktop {
+    max-width: 100%;
+    margin-left: 12px;
+    margin-right: 12px;
+}
+
+.mofa-error {
+    color: red;
 }
 
 .mofa-placeholder {

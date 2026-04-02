@@ -27,7 +27,7 @@ export async function copyRichTextToClipboard(html: string): Promise<boolean> {
         console.warn('Clipboard API 失败，尝试 fallback 方式:', e);
 
         try {
-            // 方式2: fallback - 使用 execCommand
+            // 方式2: fallback - 使用 document selection
             return copyRichTextFallback(html);
         } catch (e2) {
             console.error('复制失败:', e2);
@@ -38,15 +38,18 @@ export async function copyRichTextToClipboard(html: string): Promise<boolean> {
 }
 
 /**
- * 使用 execCommand 的 fallback 复制方式
+ * 使用 selection 的 fallback 复制方式
  */
 function copyRichTextFallback(html: string): boolean {
+    // 用 DOMParser 将 HTML 解析为 DOM 节点
+    const doc = new DOMParser().parseFromString(html, 'text/html');
     const container = document.createElement('div');
-    container.innerHTML = html;
-    container.style.position = 'fixed';
-    container.style.left = '-9999px';
-    container.style.top = '-9999px';
-    container.style.opacity = '0';
+    container.addClass('mofa-offscreen-render');
+
+    // 将解析的内容移入容器
+    for (const child of Array.from(doc.body.childNodes)) {
+        container.appendChild(child);
+    }
 
     document.body.appendChild(container);
 
@@ -59,6 +62,7 @@ function copyRichTextFallback(html: string): boolean {
         selection.addRange(range);
     }
 
+    // eslint-disable-next-line -- execCommand is the only fallback for rich text copy
     const success = document.execCommand('copy');
 
     if (selection) {
@@ -79,7 +83,6 @@ function copyRichTextFallback(html: string): boolean {
  * 去除 HTML 标签，获取纯文本
  */
 function stripHtml(html: string): string {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    return tmp.textContent || tmp.innerText || '';
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return doc.body.textContent || '';
 }

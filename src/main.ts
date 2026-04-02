@@ -16,15 +16,15 @@ export default class MofaPlugin extends Plugin {
 
         // 添加工具栏图标按钮
         this.addRibbonIcon('send', '墨发 - 发布到公众号', () => {
-            this.activateView();
+            void this.activateView();
         });
 
         // 添加命令
         this.addCommand({
-            id: 'open-mofa-publish',
+            id: 'open-panel',
             name: '打开发布面板',
             callback: () => {
-                this.activateView();
+                void this.activateView();
             },
         });
 
@@ -39,11 +39,11 @@ export default class MofaPlugin extends Plugin {
         // 添加设置面板
         this.addSettingTab(new MofaSettingTab(this.app, this));
 
-        console.log('墨发插件已加载');
+        console.debug('墨发插件已加载');
     }
 
     onunload() {
-        console.log('墨发插件已卸载');
+        console.debug('墨发插件已卸载');
     }
 
     async loadSettings() {
@@ -85,8 +85,6 @@ export default class MofaPlugin extends Plugin {
             return;
         }
 
-        const content = await this.app.vault.read(activeFile);
-
         // 延迟加载渲染器，在publish-view中统一处理
         const leaves = this.app.workspace.getLeavesOfType(MOFA_VIEW_TYPE);
         if (leaves.length > 0) {
@@ -96,11 +94,11 @@ export default class MofaPlugin extends Plugin {
             // 如果面板没打开，先打开
             await this.activateView();
             // 短暂延迟让视图加载完成
-            setTimeout(async () => {
-                const leaves = this.app.workspace.getLeavesOfType(MOFA_VIEW_TYPE);
-                if (leaves.length > 0) {
-                    const view = leaves[0].view as MofaPublishView;
-                    await view.copyToClipboard();
+            setTimeout(() => {
+                const newLeaves = this.app.workspace.getLeavesOfType(MOFA_VIEW_TYPE);
+                if (newLeaves.length > 0) {
+                    const view = newLeaves[0].view as MofaPublishView;
+                    void view.copyToClipboard();
                 }
             }, 500);
         }

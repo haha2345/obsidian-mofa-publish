@@ -4,7 +4,7 @@
  * 两种输出模式：Base64 内嵌（复制模式） / 上传到公众号素材库（API 模式）
  */
 
-import { App, TFile } from 'obsidian';
+import { App, TFile, requestUrl } from 'obsidian';
 
 export interface ProcessedImage {
     originalSrc: string;
@@ -18,8 +18,8 @@ export interface ProcessedImage {
  * 解决微信"此图片来自第三方"的问题
  */
 export async function processImagesForCopy(html: string, app: App, sourcePath: string): Promise<string> {
-    const container = document.createElement('div');
-    container.innerHTML = html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const container = doc.body;
 
     const images = container.querySelectorAll('img');
 
@@ -33,7 +33,7 @@ export async function processImagesForCopy(html: string, app: App, sourcePath: s
             let base64 = '';
 
             if (src.startsWith('http://') || src.startsWith('https://')) {
-                // 网络图片 → fetch → base64
+                // 网络图片 → requestUrl → base64
                 base64 = await fetchImageAsBase64(src);
             } else {
                 // 本地图片（包括 Obsidian vault 内的路径）
@@ -55,8 +55,8 @@ export async function processImagesForCopy(html: string, app: App, sourcePath: s
  * 获取 HTML 中所有需要上传的图片信息
  */
 export async function extractImages(html: string, app: App, sourcePath: string): Promise<ProcessedImage[]> {
-    const container = document.createElement('div');
-    container.innerHTML = html;
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const container = doc.body;
     const images = container.querySelectorAll('img');
     const results: ProcessedImage[] = [];
 
@@ -66,7 +66,6 @@ export async function extractImages(html: string, app: App, sourcePath: string):
 
         try {
             let base64 = '';
-            let buffer: ArrayBuffer | undefined;
 
             if (src.startsWith('data:')) {
                 base64 = src;
@@ -83,7 +82,6 @@ export async function extractImages(html: string, app: App, sourcePath: string):
                 originalSrc: src,
                 base64,
                 mimeType,
-                buffer,
             });
         } catch (error) {
             console.error(`提取图片失败: ${src}`, error);
@@ -94,17 +92,34 @@ export async function extractImages(html: string, app: App, sourcePath: string):
 }
 
 /**
- * 从网络获取图片并转为 base64
+ * 从网络获取图片并转为 base64（使用 Obsidian 的 requestUrl）
  */
 async function fetchImageAsBase64(url: string): Promise<string> {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
+    const res = await requestUrl({ url, method: 'GET' });
+    const arrayBuffer = res.arrayBuffer;
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = window.btoa(binary);
+
+    // 根据 content-type 或 URL 推断 mime type
+    const contentType = res.headers['content-type'] || '';
+    let mimeType = 'image/png';
+    if (contentType.includes('image/')) {
+        mimeType = contentType.split(';')[0].trim();
+    } else if (url.match(/\.jpe?g/i)) {
+        mimeType = 'image/jpeg';
+    } else if (url.match(/\.gif/i)) {
+        mimeType = 'image/gif';
+    } else if (url.match(/\.webp/i)) {
+        mimeType = 'image/webp';
+    } else if (url.match(/\.svg/i)) {
+        mimeType = 'image/svg+xml';
+    }
+
+    return `data:${mimeType};base64,${base64}`;
 }
 
 /**
