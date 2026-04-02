@@ -293,8 +293,8 @@ export class MofaPublishView extends ItemView {
 
             // 5. 应用主题样式到预览
             const katexCSS = `<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">`;
-            // 基础保护样式：防止图片溢出
-            const baseCss = `.mofa-article { overflow: hidden; box-sizing: border-box; } .mofa-article img { max-width: 100% !important; height: auto !important; }`;
+            // 基础保护样式：防止图片溢出 + 居中
+            const baseCss = `.mofa-article { overflow: hidden; box-sizing: border-box; } .mofa-article * { box-sizing: border-box; } .mofa-article img { max-width: 100% !important; height: auto !important; display: block; margin-left: auto; margin-right: auto; }`;
             this.previewEl.innerHTML = `${katexCSS}<style>${baseCss}\n${themeCSS}</style>${articleHtml}`;
 
             // 保存原始 HTML 用于复制
