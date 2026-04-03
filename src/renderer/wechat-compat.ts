@@ -95,9 +95,16 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
  * 这是解决微信编辑器"幽灵列表项"的核心修复
  */
 function compactListHTML(html: string): string {
-    // 1. 去掉 <li> 内的 <p> 包裹
-    html = html.replace(/<li([^>]*)>\s*<p([^>]*)>([\s\S]*?)<\/p>\s*<\/li>/gi, 
-        (_match, liAttr, _pAttr, content: string) => `<li${liAttr}>${content.trim()}</li>`);
+    // 1. 只解包单个 <p> 的 <li>（包含多个 <p> 的保留结构）
+    html = html.replace(/<li([^>]*)>\s*<p([^>]*)>([\s\S]*?)<\/p>\s*<\/li>/gi,
+        (_match, liAttr, _pAttr, content: string) => {
+            // 检查 content 中是否包含其他 <p> 标签（多段落列表项）
+            if (/<p[\s>]/i.test(content)) {
+                // 多段落，保留原始结构
+                return _match;
+            }
+            return `<li${liAttr}>${content.trim()}</li>`;
+        });
 
     // 2. 压缩 ul/ol 和 li 之间的所有空白
     html = html.replace(/<ul([^>]*)>\s+/gi, '<ul$1>');
@@ -277,10 +284,21 @@ function processLists(container: HTMLElement) {
         }
     });
 
+    // 处理无序列表
     container.querySelectorAll('ul').forEach((ul) => {
         const ulEl = ul as HTMLElement;
         ss(ulEl, 'padding-left', '2em');
         ss(ulEl, 'margin-bottom', '1em');
+
+        // 根据嵌套层级设置 list-style-type（与 Obsidian 编辑器保持一致）
+        const depth = getListDepth(ulEl);
+        if (depth === 0) {
+            ss(ulEl, 'list-style-type', 'disc', true);
+        } else if (depth === 1) {
+            ss(ulEl, 'list-style-type', 'circle', true);
+        } else {
+            ss(ulEl, 'list-style-type', 'square', true);
+        }
 
         ulEl.querySelectorAll(':scope > li').forEach((li) => {
             const liEl = li as HTMLElement;
@@ -289,10 +307,21 @@ function processLists(container: HTMLElement) {
         });
     });
 
+    // 处理有序列表
     container.querySelectorAll('ol').forEach((ol) => {
         const olEl = ol as HTMLElement;
         ss(olEl, 'padding-left', '2em');
         ss(olEl, 'margin-bottom', '1em');
+
+        // 根据嵌套层级设置 list-style-type
+        const depth = getListDepth(olEl);
+        if (depth === 0) {
+            ss(olEl, 'list-style-type', 'decimal', true);
+        } else if (depth === 1) {
+            ss(olEl, 'list-style-type', 'lower-alpha', true);
+        } else {
+            ss(olEl, 'list-style-type', 'lower-roman', true);
+        }
 
         olEl.querySelectorAll(':scope > li').forEach((li) => {
             const liEl = li as HTMLElement;
@@ -316,6 +345,25 @@ function processLists(container: HTMLElement) {
             checkbox.replaceWith(icon);
         }
     });
+}
+
+/**
+ * 获取列表元素的嵌套深度（0 = 顶层）1 = 第二层，以此类推）
+ */
+function getListDepth(el: HTMLElement): number {
+    let depth = 0;
+    let parent = el.parentElement;
+    while (parent) {
+        if (parent.tagName === 'UL' || parent.tagName === 'OL') {
+            depth++;
+        }
+        // 停止在容器元素
+        if (parent.classList.contains('mofa-render-container') || parent.classList.contains('mofa-article')) {
+            break;
+        }
+        parent = parent.parentElement;
+    }
+    return depth;
 }
 
 /**

@@ -416,10 +416,10 @@ export class MofaPublishView extends ItemView {
                 this.plugin.settings.wechatAppSecret
             );
 
-            // 2. 渲染文章
+            // 2. 渲染文章（不解析图片路径为 app://，保留原始 vault 路径以便上传）
             this.setStatus('渲染文章...');
             const content = await this.app.vault.read(activeFile);
-            const rawHtml = this.renderer.render(content, activeFile.path);
+            const rawHtml = this.renderer.render(content);  // 不传 sourcePath，保留原始路径
             const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
 
             const theme = this.getSelectedTheme();
@@ -427,7 +427,7 @@ export class MofaPublishView extends ItemView {
 
             const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
 
-            // 3. 上传所有图片到公众号
+            // 3. 上传所有图片到公众号（此时 img src 仍是 vault 内路径，可直接通过 vault API 读取）
             this.setStatus('上传图片...');
             const htmlWithUploadedImages = await this.uploadAllImages(articleHtml, activeFile.path, token, wxUploadImage);
 
@@ -453,12 +453,24 @@ export class MofaPublishView extends ItemView {
             let thumbMediaId = fm['thumb_media_id'] || '';
 
             if (!thumbMediaId) {
-                // 尝试提取文章中的第一张图片上传为封面素材
-                const articleDoc = new DOMParser().parseFromString(articleHtml, 'text/html');
-                const firstImg = articleDoc.body.querySelector('img');
+                // 尝试提取已上传图片的首图作为封面素材
+                // 此时 htmlWithUploadedImages 中的图片已替换为微信 CDN URL
+                const uploadedDoc = new DOMParser().parseFromString(htmlWithUploadedImages, 'text/html');
+                const firstImg = uploadedDoc.body.querySelector('img');
                 if (firstImg) {
-                    const src = firstImg.getAttribute('src');
-                    if (src) {
+                    const src = firstImg.getAttribute('src') || '';
+                    if (src && src.includes('mmbiz.qpic.cn')) {
+                        // 首图已上传到微信，用网络 URL 重新上传为永久素材
+                        this.setStatus('上传首图作为封面...');
+                        const blob = await this.fetchImageAsBlob(src, activeFile.path);
+                        if (blob) {
+                            const uploadRes = await wxUploadImage(blob, 'cover.png', token, 'image');
+                            if (uploadRes.media_id) {
+                                thumbMediaId = uploadRes.media_id;
+                            }
+                        }
+                    } else if (src) {
+                        // 首图未成功上传到微信，尝试从原始路径读取
                         this.setStatus('上传首图作为封面...');
                         const blob = await this.fetchImageAsBlob(src, activeFile.path);
                         if (blob) {
@@ -523,6 +535,9 @@ export class MofaPublishView extends ItemView {
 
     /**
      * 上传 HTML 中的所有图片到微信，替换 src 为微信 CDN URL
+     * 参考 note-to-mp 的 LocalImageManager 架构：
+     * 图片 src 此时仍是 vault 内原始路径（未被转为 app://），
+     * 直接通过 vault API 读取本地文件上传
      */
     private async uploadAllImages(
         html: string,
@@ -542,10 +557,18 @@ export class MofaPublishView extends ItemView {
             try {
                 const blob = await this.fetchImageAsBlob(src, sourcePath);
                 if (blob) {
-                    // 获取后缀名确保微信不报错
-                    let filename = src.split('/').pop()?.split('?')[0] || 'image.png';
+                    // 推断文件名和后缀
+                    let filename = 'image.png';
                     const extMatch = src.match(/data:image\/(\w+)/);
-                    if (extMatch) filename = `image.${extMatch[1]}`;
+                    if (extMatch) {
+                        filename = `image.${extMatch[1]}`;
+                    } else {
+                        // 从路径中提取文件名
+                        const pathParts = src.split('/').pop()?.split('?')[0];
+                        if (pathParts && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(pathParts)) {
+                            filename = pathParts;
+                        }
+                    }
 
                     const result = await uploadFn(blob, filename, token);
                     if (result.url) {
@@ -553,6 +576,8 @@ export class MofaPublishView extends ItemView {
                     } else if (result.errcode) {
                         console.warn(`图片上传失败: ${result.errmsg}`);
                     }
+                } else {
+                    console.warn(`无法读取图片: ${src}`);
                 }
             } catch (e) {
                 console.warn(`上传图片失败: ${src}`, e);
@@ -568,17 +593,21 @@ export class MofaPublishView extends ItemView {
     }
 
     /**
-     * 获取图片的 Blob 数据（支持全部网络协议、DataURI、Vault app:// 协议及相对路径）
+     * 获取图片的 Blob 数据
+     * 支持：网络图片、DataURI、app:// 协议、Vault 内路径
+     *
+     * 参考 note-to-mp 的做法：优先通过 vault API 读取本地文件，
+     * 避免通过 requestUrl(app://) 获取的不可靠性
      */
     private async fetchImageAsBlob(src: string, sourcePath: string): Promise<Blob | null> {
         try {
-            // 使用 Obsidian 的 requestUrl 获取网络图片
+            // 1. 网络图片（http/https）→ 使用 Obsidian requestUrl
             if (src.startsWith('http://') || src.startsWith('https://')) {
                 const res = await requestUrl({ url: src, method: 'GET' });
                 return new Blob([res.arrayBuffer]);
             }
 
-            // data URI 直接转 blob（无需 fetch）
+            // 2. data URI → 直接转 Blob
             if (src.startsWith('data:')) {
                 const [header, b64data] = src.split(',');
                 const mimeMatch = header.match(/data:([^;]+)/);
@@ -592,33 +621,28 @@ export class MofaPublishView extends ItemView {
                 return new Blob([ab], { type: mime });
             }
 
-            // app:// 协议：通过 requestUrl 获取
+            // 3. app:// 协议 → 尝试从 URL 中反解文件名，通过 vault 查找
             if (src.startsWith('app://')) {
-                const res = await requestUrl({ url: src, method: 'GET' });
-                return new Blob([res.arrayBuffer]);
+                const file = this.resolveAppUrl(src, sourcePath);
+                if (file) {
+                    const arrayBuf = await this.app.vault.readBinary(file);
+                    return new Blob([arrayBuf], { type: this.getMimeType(file.extension) });
+                }
+                // 回退：尝试 requestUrl
+                try {
+                    const res = await requestUrl({ url: src, method: 'GET' });
+                    return new Blob([res.arrayBuffer]);
+                } catch {
+                    console.warn(`app:// URL 获取失败: ${src}`);
+                    return null;
+                }
             }
 
-            // 对于纯相对路径
-            const vault = this.app.vault;
-            let file = vault.getAbstractFileByPath(src);
-            if (!file) {
-                const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
-                const relPath = sourceDir ? `${sourceDir}/${src}` : src;
-                file = vault.getAbstractFileByPath(relPath);
-            }
-            if (!file) {
-                const linked = this.app.metadataCache.getFirstLinkpathDest(src, sourcePath);
-                if (linked) file = linked;
-            }
-
-            if (file && file instanceof TFile) {
-                const arrayBuf = await vault.readBinary(file);
-                const ext = file.extension.toLowerCase();
-                const mimeMap: Record<string, string> = {
-                    'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                    'gif': 'image/gif', 'webp': 'image/webp',
-                };
-                return new Blob([arrayBuf], { type: mimeMap[ext] || 'image/png' });
+            // 4. Vault 内路径（相对路径或文件名）→ 直接通过 vault API 读取
+            const file = this.resolveVaultFile(src, sourcePath);
+            if (file) {
+                const arrayBuf = await this.app.vault.readBinary(file);
+                return new Blob([arrayBuf], { type: this.getMimeType(file.extension) });
             }
 
             return null;
@@ -626,6 +650,67 @@ export class MofaPublishView extends ItemView {
             console.warn(`读取图片失败 (${src}):`, error);
             return null;
         }
+    }
+
+    /**
+     * 从 app:// URL 中提取文件名并在 vault 中查找对应文件
+     */
+    private resolveAppUrl(appUrl: string, sourcePath: string): TFile | null {
+        try {
+            // app:// URL 格式: app://xxx/vault-path/to/image.png?timestamp
+            const url = new URL(appUrl);
+            let pathname = decodeURIComponent(url.pathname);
+            // 去掉开头的 /
+            if (pathname.startsWith('/')) pathname = pathname.substring(1);
+
+            // 尝试直接用路径查找
+            const file = this.resolveVaultFile(pathname, sourcePath);
+            if (file) return file;
+
+            // 尝试只用文件名查找
+            const filename = pathname.split('/').pop();
+            if (filename) {
+                return this.resolveVaultFile(filename, sourcePath);
+            }
+        } catch {
+            // URL 解析失败，忽略
+        }
+        return null;
+    }
+
+    /**
+     * 在 vault 中查找图片文件（支持直接路径、相对路径、链接解析）
+     */
+    private resolveVaultFile(imagePath: string, sourcePath: string): TFile | null {
+        const vault = this.app.vault;
+
+        // 1. 直接路径
+        let file = vault.getAbstractFileByPath(imagePath);
+        if (file && file instanceof TFile) return file;
+
+        // 2. 相对路径
+        const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+        const relPath = sourceDir ? `${sourceDir}/${imagePath}` : imagePath;
+        file = vault.getAbstractFileByPath(relPath);
+        if (file && file instanceof TFile) return file;
+
+        // 3. Obsidian 链接解析（处理不带路径的文件名）
+        const linked = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourcePath);
+        if (linked && linked instanceof TFile) return linked;
+
+        return null;
+    }
+
+    /**
+     * 根据文件扩展名获取 MIME 类型
+     */
+    private getMimeType(ext: string): string {
+        const mimeMap: Record<string, string> = {
+            'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+            'gif': 'image/gif', 'webp': 'image/webp', 'svg': 'image/svg+xml',
+            'bmp': 'image/bmp',
+        };
+        return mimeMap[ext.toLowerCase()] || 'image/png';
     }
 
     /**
