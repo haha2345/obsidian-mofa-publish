@@ -72,11 +72,11 @@ export class MofaSettingTab extends PluginSettingTab {
             .setDesc('选择代码块的高亮配色方案')
             .addDropdown((dropdown) =>
                 dropdown
-                    .addOption('github-dark', 'GitHub Dark')
-                    .addOption('github', 'GitHub Light')
+                    .addOption('github-dark', 'GitHub dark')
+                    .addOption('github', 'GitHub light')
                     .addOption('monokai', 'Monokai')
                     .addOption('dracula', 'Dracula')
-                    .addOption('one-dark', 'One Dark')
+                    .addOption('one-dark', 'One dark')
                     .setValue(this.plugin.settings.codeHighlight)
                     .onChange(async (value) => {
                         this.plugin.settings.codeHighlight = value;
@@ -118,8 +118,8 @@ export class MofaSettingTab extends PluginSettingTab {
         });
 
         new Setting(containerEl)
-            .setName('AppID')
-            .setDesc('微信公众号的 AppID')
+            .setName('App ID')
+            .setDesc('微信公众号的 app ID')
             .addText((text) =>
                 text
                     .setPlaceholder('wx1234567890abcdef')
@@ -131,11 +131,11 @@ export class MofaSettingTab extends PluginSettingTab {
             );
 
         new Setting(containerEl)
-            .setName('AppSecret')
-            .setDesc('微信公众号的 AppSecret')
+            .setName('App secret')
+            .setDesc('微信公众号的 app secret')
             .addText((text) =>
                 text
-                    .setPlaceholder('点击输入 AppSecret')
+                    .setPlaceholder('点击输入 app secret')
                     .setValue(this.plugin.settings.wechatAppSecret)
                     .onChange(async (value) => {
                         this.plugin.settings.wechatAppSecret = value;
@@ -154,7 +154,7 @@ export class MofaSettingTab extends PluginSettingTab {
                     .onClick(async () => {
                         if (!this.plugin.settings.wechatAppId || !this.plugin.settings.wechatAppSecret) {
                             const { Notice } = await import('obsidian');
-                            new Notice('请先填写 AppID 和 AppSecret');
+                            new Notice('请先填写 app ID 和 app secret');
                             return;
                         }
                         button.setButtonText('连接中...');
@@ -199,13 +199,13 @@ export class MofaSettingTab extends PluginSettingTab {
 
         // 如何获取 AppID 的说明
         const helpEl = containerEl.createEl('details');
-        helpEl.createEl('summary', { text: '🔍 如何获取 AppID 和 AppSecret？' });
+        helpEl.createEl('summary', { text: '🔍 如何获取 app ID 和 app secret？' });
         const helpContent = helpEl.createEl('div', { cls: 'mofa-help-content' });
         helpContent.createEl('ol')
             .createEl('li', { text: '登录微信公众平台：https://mp.weixin.qq.com' })
             .parentElement?.createEl('li', { text: '进入「设置与开发」→「基本配置」' })
-            .parentElement?.createEl('li', { text: '复制开发者 ID（AppID）' })
-            .parentElement?.createEl('li', { text: '重置并复制开发者密码（AppSecret）' })
+            .parentElement?.createEl('li', { text: '复制开发者 ID（app ID）' })
+            .parentElement?.createEl('li', { text: '重置并复制开发者密码（app secret）' })
             .parentElement?.createEl('li', { text: '点击上方「查询 IP」按钮获取公网 IP' })
             .parentElement?.createEl('li', { text: '在公众号「IP 白名单」中添加该 IP' })
             .parentElement?.createEl('li', { text: '⚠️ 如果 IP 变化（路由器重启等），需要重新查询并更新白名单' });
@@ -230,7 +230,7 @@ export class MofaSettingTab extends PluginSettingTab {
         const themeHelpEl = containerEl.createEl('details');
         themeHelpEl.createEl('summary', { text: '📝 如何创建自定义主题？' });
         const themeHelpContent = themeHelpEl.createEl('div', { cls: 'mofa-help-content' });
-        themeHelpContent.createEl('p', { text: '在 Vault 中新建一篇笔记，添加 CSS 代码块：' });
+        themeHelpContent.createEl('p', { text: '在 vault 中新建一篇笔记，添加 CSS 代码块：' });
         themeHelpContent.createEl('pre').createEl('code', {
             text: '```css title="我的主题"\n.mofa-article {\n    color: #333;\n    background-color: #f9f9f9;\n    padding: 20px;\n}\n.mofa-article h2 {\n    color: #e65100;\n    border-left: 4px solid #e65100;\n    padding-left: 12px;\n}\n```',
         });

@@ -48,8 +48,8 @@ function serializeChildren(el: HTMLElement): string {
  */
 export function makeWechatCompatible(html: string, options: WechatCompatOptions): string {
     const doc = new DOMParser().parseFromString(`<div class="mofa-render-container">${html}</div>`, 'text/html');
-    const container = doc.body.querySelector('.mofa-render-container') as HTMLElement;
-    if (!container) return html;
+    const container = doc.body.querySelector('.mofa-render-container');
+    if (!container || !(container instanceof HTMLElement)) return html;
 
     try {
         // 1. 解析主题 CSS 并直接 inline 到匹配元素
@@ -122,8 +122,8 @@ function compactListHTML(html: string): string {
  * 保留背景色：微信编辑器会覆盖最外层 div 的背景
  */
 function preserveBackground(container: HTMLElement) {
-    const articleEl = container.querySelector('.mofa-article') as HTMLElement;
-    if (!articleEl) return;
+    const articleEl = container.querySelector('.mofa-article');
+    if (!articleEl || !(articleEl instanceof HTMLElement)) return;
 
     const bgColor = articleEl.style.getPropertyValue('background-color');
     if (!bgColor || bgColor === 'transparent' || bgColor === '#fff' || bgColor === '#ffffff' || bgColor === 'rgb(255, 255, 255)') {
@@ -306,8 +306,8 @@ function processLists(container: HTMLElement) {
         ss(liEl, 'list-style-type', 'none', true);
         ss(liEl, 'margin-left', '-1.5em', true);
 
-        const checkbox = liEl.querySelector('input[type="checkbox"]') as HTMLInputElement;
-        if (checkbox) {
+        const checkbox = liEl.querySelector('input[type="checkbox"]');
+        if (checkbox && checkbox instanceof HTMLInputElement) {
             const isChecked = checkbox.checked;
             const icon = document.createElement('span');
             icon.textContent = isChecked ? '☑' : '☐';
@@ -396,23 +396,21 @@ function processImages(container: HTMLElement) {
  */
 function processInlineElements(container: HTMLElement) {
     container.querySelectorAll('strong').forEach((el) => {
-        ss(el as HTMLElement, 'font-weight', '700');
+        ss(el, 'font-weight', '700');
     });
 
     container.querySelectorAll('em').forEach((el) => {
-        ss(el as HTMLElement, 'font-style', 'italic', true);
+        ss(el, 'font-style', 'italic', true);
     });
 
     container.querySelectorAll('del').forEach((el) => {
-        const htmlEl = el as HTMLElement;
-        ss(htmlEl, 'text-decoration', 'line-through', true);
-        ss(htmlEl, 'color', '#999');
+        ss(el, 'text-decoration', 'line-through', true);
+        ss(el, 'color', '#999');
     });
 
     container.querySelectorAll('mark').forEach((el) => {
-        const htmlEl = el as HTMLElement;
-        ss(htmlEl, 'background-color', 'rgba(255, 208, 0, 0.4)');
-        ss(htmlEl, 'padding', '2px 4px', true);
+        ss(el, 'background-color', 'rgba(255, 208, 0, 0.4)');
+        ss(el, 'padding', '2px 4px', true);
     });
 }
 

@@ -10,7 +10,7 @@ import { Notice } from 'obsidian';
  */
 export async function copyRichTextToClipboard(html: string): Promise<boolean> {
     try {
-        // 方式1: 使用 Clipboard API（推荐）
+        // 使用 Clipboard API（Obsidian 运行在 Electron 中，此 API 可用）
         const blob = new Blob([html], { type: 'text/html' });
         const plainBlob = new Blob([stripHtml(html)], { type: 'text/plain' });
 
@@ -24,59 +24,10 @@ export async function copyRichTextToClipboard(html: string): Promise<boolean> {
         new Notice('✅ 已复制到剪贴板！请到公众号编辑器粘贴');
         return true;
     } catch (e) {
-        console.warn('Clipboard API 失败，尝试 fallback 方式:', e);
-
-        try {
-            // 方式2: fallback - 使用 document selection
-            return copyRichTextFallback(html);
-        } catch (e2) {
-            console.error('复制失败:', e2);
-            new Notice('❌ 复制失败，请重试');
-            return false;
-        }
-    }
-}
-
-/**
- * 使用 selection 的 fallback 复制方式
- */
-function copyRichTextFallback(html: string): boolean {
-    // 用 DOMParser 将 HTML 解析为 DOM 节点
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    const container = document.createElement('div');
-    container.addClass('mofa-offscreen-render');
-
-    // 将解析的内容移入容器
-    for (const child of Array.from(doc.body.childNodes)) {
-        container.appendChild(child);
-    }
-
-    document.body.appendChild(container);
-
-    const range = document.createRange();
-    range.selectNodeContents(container);
-
-    const selection = window.getSelection();
-    if (selection) {
-        selection.removeAllRanges();
-        selection.addRange(range);
-    }
-
-    // eslint-disable-next-line deprecation/deprecation -- execCommand is the only fallback for rich text copy
-    const success = document.execCommand('copy');
-
-    if (selection) {
-        selection.removeAllRanges();
-    }
-    document.body.removeChild(container);
-
-    if (success) {
-        new Notice('✅ 已复制到剪贴板！请到公众号编辑器粘贴');
-    } else {
+        console.error('复制失败:', e);
         new Notice('❌ 复制失败，请重试');
+        return false;
     }
-
-    return success;
 }
 
 /**

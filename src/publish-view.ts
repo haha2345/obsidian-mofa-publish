@@ -394,7 +394,7 @@ export class MofaPublishView extends ItemView {
      */
     async publishToDraft() {
         if (!this.plugin.settings.wechatAppId || !this.plugin.settings.wechatAppSecret) {
-            new Notice('⚙️ 请先在设置中填写公众号的 AppID 和 AppSecret');
+            new Notice('⚙️ 请先在设置中填写公众号的 app ID 和 app secret');
             return;
         }
 
@@ -578,16 +578,24 @@ export class MofaPublishView extends ItemView {
                 return new Blob([res.arrayBuffer]);
             }
 
-            // data URI 直接转 blob
+            // data URI 直接转 blob（无需 fetch）
             if (src.startsWith('data:')) {
-                const resp = await fetch(src); // eslint-disable-line -- data URI fetch is safe and local-only
-                return await resp.blob();
+                const [header, b64data] = src.split(',');
+                const mimeMatch = header.match(/data:([^;]+)/);
+                const mime = mimeMatch ? mimeMatch[1] : 'image/png';
+                const byteString = atob(b64data);
+                const ab = new ArrayBuffer(byteString.length);
+                const ia = new Uint8Array(ab);
+                for (let i = 0; i < byteString.length; i++) {
+                    ia[i] = byteString.charCodeAt(i);
+                }
+                return new Blob([ab], { type: mime });
             }
 
-            // app:// 协议
+            // app:// 协议：通过 requestUrl 获取
             if (src.startsWith('app://')) {
-                const resp = await fetch(src); // eslint-disable-line -- app:// is Obsidian-internal protocol
-                return await resp.blob();
+                const res = await requestUrl({ url: src, method: 'GET' });
+                return new Blob([res.arrayBuffer]);
             }
 
             // 对于纯相对路径
