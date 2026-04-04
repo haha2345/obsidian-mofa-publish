@@ -415,6 +415,7 @@ export class MofaPublishView extends ItemView {
                 this.plugin.settings.wechatAppId,
                 this.plugin.settings.wechatAppSecret
             );
+            console.debug('[MoFa] Token 获取成功');
 
             // 2. 渲染文章（不解析图片路径为 app://，保留原始 vault 路径以便上传）
             this.setStatus('渲染文章...');
@@ -426,14 +427,17 @@ export class MofaPublishView extends ItemView {
             const themeCSS = theme?.css || '';
 
             const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+            console.debug('[MoFa] 渲染完成，HTML 长度:', articleHtml.length);
 
             // 3. 上传所有图片到公众号（此时 img src 仍是 vault 内路径，可直接通过 vault API 读取）
             this.setStatus('上传图片...');
             const htmlWithUploadedImages = await this.uploadAllImages(articleHtml, activeFile.path, token, wxUploadImage);
+            console.debug('[MoFa] 图片上传完成，HTML 长度:', htmlWithUploadedImages.length);
 
             // 4. 微信 DOM 兼容处理
             this.setStatus('适配微信格式...');
             const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, { themeCSS });
+            console.debug('[MoFa] 微信兼容处理完成，HTML 长度:', wechatHtml.length);
 
             // 5. 解析 frontmatter 元数据
             const metadata = this.renderer.extractFrontmatter(content);
@@ -504,14 +508,22 @@ export class MofaPublishView extends ItemView {
 
             // 7. 创建草稿
             this.setStatus('创建草稿...');
+            const sanitizedHtml = this.sanitizeForWechat(wechatHtml);
+            console.debug('[MoFa] 清洗后 HTML 长度:', sanitizedHtml.length);
+            console.debug('[MoFa] 草稿参数:', { title, author, digest: digest.slice(0, 50), thumbMediaId, contentLength: sanitizedHtml.length });
+            // 输出前 500 字符方便排查内容问题
+            console.debug('[MoFa] HTML 前 500 字符:', sanitizedHtml.slice(0, 500));
+            console.debug('[MoFa] HTML 后 500 字符:', sanitizedHtml.slice(-500));
+
             const res = await wxAddDraft(token, {
                 title,
                 author,
                 digest,
-                content: wechatHtml,
+                content: sanitizedHtml,
                 thumb_media_id: thumbMediaId,
                 need_open_comment: fm['open_comment'] === 'true' ? 1 : 0,
             });
+            console.debug('[MoFa] wxAddDraft 响应:', JSON.stringify(res.json));
 
             if (res.status !== 200) {
                 const errData = res.json;
@@ -541,10 +553,57 @@ export class MofaPublishView extends ItemView {
             }
 
         } catch (error) {
-            console.error('发布失败:', error);
+            console.error('[MoFa] 发布失败:', error);
+            console.error('[MoFa] 错误详情:', (error as Error).stack || (error as Error).message);
             new Notice('❌ 发布失败: ' + (error as Error).message);
             this.setStatus('❌ 发布失败');
         }
+    }
+
+    /**
+     * 清洗 HTML 内容，移除微信草稿 API 不接受的元素
+     * 已知微信不接受：外链 <a>、<svg>、<script>、<style>、HTML 注释、控制字符
+     */
+    private sanitizeForWechat(html: string): string {
+        let s = html;
+
+        // 1. 外部链接 <a href="...">text</a> → 保留文字，去掉标签
+        s = s.replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
+            (_m, href: string, text: string) => {
+                if (href.includes('weixin.qq.com') || href.includes('mp.weixin.qq.com')) {
+                    return _m; // 微信域名链接保留
+                }
+                return text;
+            }
+        );
+
+        // 2. 锚点标签 <a id="xxx">...</a> / <a name="xxx">...</a>
+        s = s.replace(/<a\s+(?:id|name)="[^"]*"[^>]*>([\s\S]*?)<\/a>/gi, '$1');
+        // 自闭合锚点 <a id="xxx"/>
+        s = s.replace(/<a\s+(?:id|name)="[^"]*"[^>]*\/>/gi, '');
+
+        // 3. <svg> 标签（微信不支持）
+        s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '');
+
+        // 4. <script> / <style>
+        s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
+        s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
+
+        // 5. HTML 注释
+        s = s.replace(/<!--[\s\S]*?-->/g, '');
+
+        // 6. class 属性
+        s = s.replace(/\s+class="[^"]*"/gi, '');
+
+        // 7. data-* 属性
+        s = s.replace(/\s+data-[a-z-]+="[^"]*"/gi, '');
+
+        // 8. 控制字符（保留 \t \n \r）
+        // eslint-disable-next-line no-control-regex
+        s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+
+        console.debug('[MoFa] sanitizeForWechat 完成，内容长度:', s.length);
+        return s;
     }
 
     /**
