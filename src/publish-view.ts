@@ -511,9 +511,21 @@ export class MofaPublishView extends ItemView {
             const sanitizedHtml = this.sanitizeForWechat(wechatHtml);
             console.debug('[MoFa] 清洗后 HTML 长度:', sanitizedHtml.length);
             console.debug('[MoFa] 草稿参数:', { title, author, digest: digest.slice(0, 50), thumbMediaId, contentLength: sanitizedHtml.length });
-            // 输出前 500 字符方便排查内容问题
-            console.debug('[MoFa] HTML 前 500 字符:', sanitizedHtml.slice(0, 500));
-            console.debug('[MoFa] HTML 后 500 字符:', sanitizedHtml.slice(-500));
+
+            // 🔍 调试：将最终 HTML 保存到 vault 根目录，方便排查
+            try {
+                const debugPath = '_debug_mofa_output.html';
+                const debugContent = `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>MoFa Debug Output</title></head><body>\n${sanitizedHtml}\n</body></html>`;
+                const existing = this.app.vault.getAbstractFileByPath(debugPath);
+                if (existing instanceof TFile) {
+                    await this.app.vault.modify(existing, debugContent);
+                } else {
+                    await this.app.vault.create(debugPath, debugContent);
+                }
+                console.debug('[MoFa] 调试 HTML 已保存到:', debugPath);
+            } catch (debugErr) {
+                console.warn('[MoFa] 调试文件保存失败:', debugErr);
+            }
 
             const res = await wxAddDraft(token, {
                 title,
@@ -582,7 +594,12 @@ export class MofaPublishView extends ItemView {
         // 自闭合锚点 <a id="xxx"/>
         s = s.replace(/<a\s+(?:id|name)="[^"]*"[^>]*\/>/gi, '');
 
-        // 3. <svg> 标签（微信不支持）
+        // 3. <svg> 标签（微信不支持）→ 替换为 CSS 分割线
+        // processDividers 注入了 <section><svg>...</svg></section>，需要保留 section 但替换内容
+        s = s.replace(/<section([^>]*)>\s*<svg[\s\S]*?<\/svg>\s*<\/section>/gi,
+            '<section$1><hr style="border:none;border-top:1px solid #eee;margin:1.5em auto;width:80%;"></section>'
+        );
+        // 独立 <svg> 标签直接移除
         s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '');
 
         // 4. <script> / <style>
@@ -601,6 +618,15 @@ export class MofaPublishView extends ItemView {
         // 8. 控制字符（保留 \t \n \r）
         // eslint-disable-next-line no-control-regex
         s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+
+        // 9. 移除未成功上传的图片（非 http/https/mmbiz src）
+        s = s.replace(/<img[^>]*\ssrc="([^"]*)"[^>]*>/gi, (match, src) => {
+            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
+                return match; // 网络图片或 data URI，保留
+            }
+            console.warn('[MoFa] 移除未上传的本地图片:', src);
+            return ''; // 本地路径/app://图片，微信不接受
+        });
 
         console.debug('[MoFa] sanitizeForWechat 完成，内容长度:', s.length);
         return s;
@@ -712,7 +738,10 @@ export class MofaPublishView extends ItemView {
             }
 
             // 4. Vault 内路径（相对路径或文件名）→ 直接通过 vault API 读取
-            const file = this.resolveVaultFile(src, sourcePath);
+            // 注意：先 URL 解码（markdown-it 会将中文路径编码为 %XX）
+            const decodedSrc = decodeURIComponent(src);
+            console.debug('[MoFa] 解析 vault 图片路径:', src, '->', decodedSrc);
+            const file = this.resolveVaultFile(decodedSrc, sourcePath);
             if (file) {
                 const arrayBuf = await this.app.vault.readBinary(file);
                 return new Blob([arrayBuf], { type: this.getMimeType(file.extension) });
