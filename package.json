@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "node esbuild.config.mjs production",
+    "test": "npm run test:build && node --test .test-dist/tests/*.test.js",
+    "test:build": "rm -rf .test-dist && tsc -p tsconfig.test.json",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [

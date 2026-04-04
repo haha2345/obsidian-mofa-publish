@@ -36,6 +36,14 @@ export default class MofaPlugin extends Plugin {
             },
         });
 
+        this.addCommand({
+            id: 'diagnose-wechat-invalid-content',
+            name: '定位当前文档出错元素',
+            callback: async () => {
+                await this.diagnoseWechatInvalidContent();
+            },
+        });
+
         // 添加设置面板
         this.addSettingTab(new MofaSettingTab(this.app, this));
 
@@ -85,20 +93,35 @@ export default class MofaPlugin extends Plugin {
             return;
         }
 
-        // 延迟加载渲染器，在publish-view中统一处理
+        await this.runWithPublishView(async (view) => {
+            await view.copyToClipboard();
+        });
+    }
+
+    async diagnoseWechatInvalidContent() {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('请先打开一篇笔记');
+            return;
+        }
+
+        await this.runWithPublishView(async (view) => {
+            await view.diagnoseWechatFailure();
+        });
+    }
+
+    private async runWithPublishView(action: (view: MofaPublishView) => Promise<void>) {
         const leaves = this.app.workspace.getLeavesOfType(MOFA_VIEW_TYPE);
         if (leaves.length > 0) {
             const view = leaves[0].view as MofaPublishView;
-            await view.copyToClipboard();
+            await action(view);
         } else {
-            // 如果面板没打开，先打开
             await this.activateView();
-            // 短暂延迟让视图加载完成
             setTimeout(() => {
                 const newLeaves = this.app.workspace.getLeavesOfType(MOFA_VIEW_TYPE);
                 if (newLeaves.length > 0) {
                     const view = newLeaves[0].view as MofaPublishView;
-                    void view.copyToClipboard();
+                    void action(view);
                 }
             }, 500);
         }

@@ -3,20 +3,57 @@
  * 极简 3 步操作：选主题 → 预览 → 发布
  */
 
-import { ItemView, WorkspaceLeaf, Notice, TFile, requestUrl } from 'obsidian';
+import { FileSystemAdapter, ItemView, WorkspaceLeaf, Notice, TFile, requestUrl } from 'obsidian';
 import type MofaPlugin from './main';
 import { MarkdownRenderer } from './renderer/markdown-renderer';
 import { makeWechatCompatible } from './renderer/wechat-compat';
 import { processMermaidBlocks } from './renderer/mermaid-renderer';
 import { processImagesForCopy } from './renderer/image-processor';
+import { clipPreviewText, deltaDebug } from './utils/wechat-bisect';
 import { copyRichTextToClipboard } from './utils/clipboard';
 import { getBuiltinThemes, getThemeById, parseExternalTheme, Theme } from './themes/theme-manager';
+import { buildDraftDebugInfo, normalizeWechatTitle, resolveOriginalDocumentId, type DraftDebugInfo, type DraftRequestPayload } from './utils/wechat-publish-debug';
+import { sanitizeForWechat } from './utils/wechat-sanitize';
 import { UploadResult } from './wechat/wechat-api';
 
 export const MOFA_VIEW_TYPE = 'mofa-publish-view';
 
+type DraftPayloadBase = Omit<DraftRequestPayload, 'content'>;
+
+interface DraftPreparationContext {
+    activeFile: TFile;
+    title: string;
+    sanitizedHtml: string;
+    requestPayloadBase: DraftPayloadBase;
+    originalDocumentId: string;
+}
+
+interface BisectItem {
+    html: string;
+    path: string;
+    tagName: string;
+    preview: string;
+}
+
+interface BisectTarget {
+    path: string;
+    wrapperStart: string;
+    wrapperEnd: string;
+    items: BisectItem[];
+}
+
+interface BisectAttempt {
+    label: string;
+    result: 'pass' | 'fail-45166' | 'error';
+    errcode?: number;
+    errmsg?: string;
+    fragments: Array<Pick<BisectItem, 'path' | 'tagName' | 'preview'>>;
+    debugInfo: DraftDebugInfo;
+}
+
 export class MofaPublishView extends ItemView {
     private plugin: MofaPlugin;
+    private debugLogDir = '_mofa_debug';
     private previewEl: HTMLElement | null = null;
     private themeSelect: HTMLSelectElement | null = null;
     private previewMode: 'mobile' | 'desktop' = 'mobile';
@@ -110,6 +147,12 @@ export class MofaPublishView extends ItemView {
             cls: 'mofa-btn mofa-btn-secondary',
         });
         draftBtn.addEventListener('click', () => { void this.publishToDraft(); });
+
+        const diagnoseBtn = actionBar.createEl('button', {
+            text: '🧪 定位报错元素',
+            cls: 'mofa-btn mofa-btn-secondary',
+        });
+        diagnoseBtn.addEventListener('click', () => { void this.diagnoseWechatFailure(); });
 
         // ===== 提示信息 =====
         const tipEl = container.createDiv('mofa-tip');
@@ -409,7 +452,6 @@ export class MofaPublishView extends ItemView {
         try {
             const { wxGetToken, wxUploadImage, wxAddDraft, wxBatchGetMaterial } = await import('./wechat/wechat-api');
 
-            // 1. 获取 access_token
             this.setStatus('获取 Token...');
             const token = await wxGetToken(
                 this.plugin.settings.wechatAppId,
@@ -417,125 +459,22 @@ export class MofaPublishView extends ItemView {
             );
             console.debug('[MoFa] Token 获取成功');
 
-            // 2. 渲染文章（不解析图片路径为 app://，保留原始 vault 路径以便上传）
-            this.setStatus('渲染文章...');
-            const content = await this.app.vault.read(activeFile);
-            const rawHtml = this.renderer.render(content);  // 不传 sourcePath，保留原始路径
-            const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
-
-            const theme = this.getSelectedTheme();
-            const themeCSS = theme?.css || '';
-
-            const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
-            console.debug('[MoFa] 渲染完成，HTML 长度:', articleHtml.length);
-
-            // 3. 上传所有图片到公众号（此时 img src 仍是 vault 内路径，可直接通过 vault API 读取）
-            this.setStatus('上传图片...');
-            const htmlWithUploadedImages = await this.uploadAllImages(articleHtml, activeFile.path, token, wxUploadImage);
-            console.debug('[MoFa] 图片上传完成，HTML 长度:', htmlWithUploadedImages.length);
-
-            // 4. 微信 DOM 兼容处理
-            this.setStatus('适配微信格式...');
-            const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, { themeCSS });
-            console.debug('[MoFa] 微信兼容处理完成，HTML 长度:', wechatHtml.length);
-
-            // 5. 解析 frontmatter 元数据
-            const metadata = this.renderer.extractFrontmatter(content);
-            const fm = metadata.frontmatter;
-
-            // 智能提取标题：frontmatter -> 一级标题 -> 文件名
-            let title = fm['title'];
-            if (!title) {
-                const h1Match = content.match(/^#\s+(.+)$/m);
-                title = h1Match ? h1Match[1].trim() : activeFile.basename;
-            }
-            const author = fm['author'] || '';
-            const digest = fm['digest'] || '';
-
-            // 6. 获取封面（优先：frontmatter -> 文章首图 -> 微信已有素材）
-            this.setStatus('处理封面...');
-            let thumbMediaId = fm['thumb_media_id'] || '';
-
-            if (!thumbMediaId) {
-                // 尝试提取已上传图片的首图作为封面素材
-                // 此时 htmlWithUploadedImages 中的图片已替换为微信 CDN URL
-                const uploadedDoc = new DOMParser().parseFromString(htmlWithUploadedImages, 'text/html');
-                const firstImg = uploadedDoc.body.querySelector('img');
-                if (firstImg) {
-                    const src = firstImg.getAttribute('src') || '';
-                    if (src && src.includes('mmbiz.qpic.cn')) {
-                        // 首图已上传到微信，用网络 URL 重新上传为永久素材
-                        this.setStatus('上传首图作为封面...');
-                        const blob = await this.fetchImageAsBlob(src, activeFile.path);
-                        if (blob) {
-                            const uploadRes = await wxUploadImage(blob, 'cover.png', token, 'image');
-                            if (uploadRes.media_id) {
-                                thumbMediaId = uploadRes.media_id;
-                            }
-                        }
-                    } else if (src) {
-                        // 首图未成功上传到微信，尝试从原始路径读取
-                        this.setStatus('上传首图作为封面...');
-                        const blob = await this.fetchImageAsBlob(src, activeFile.path);
-                        if (blob) {
-                            const uploadRes = await wxUploadImage(blob, 'cover.png', token, 'image');
-                            if (uploadRes.media_id) {
-                                thumbMediaId = uploadRes.media_id;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!thumbMediaId) {
-                // 如果文章没有图片，则尝试从微信已有素材取一张
-                try {
-                    const materials = await wxBatchGetMaterial(token, 'image');
-                    if (materials.item_count > 0) {
-                        thumbMediaId = materials.item[0].media_id;
-                    }
-                } catch (e) {
-                    console.warn('获取默认封面失败:', e);
-                }
-            }
-
-            // 最后依然没有封面，创建草稿会失败，拦截提示
-            if (!thumbMediaId) {
-                new Notice('⚠️ 文章内没有图片，且公众号后台无可用图片，无法生成封面。请至少插入一张图片！');
-                this.setStatus('❌ 缺少封面素材');
-                return;
-            }
-
-            // 7. 创建草稿
+            const context = await this.prepareDraftContext(activeFile, token, wxUploadImage, wxBatchGetMaterial);
             this.setStatus('创建草稿...');
-            const sanitizedHtml = this.sanitizeForWechat(wechatHtml);
-            console.debug('[MoFa] 清洗后 HTML 长度:', sanitizedHtml.length);
-            console.debug('[MoFa] 草稿参数:', { title, author, digest: digest.slice(0, 50), thumbMediaId, contentLength: sanitizedHtml.length });
-
-            // 🔍 调试：将最终 HTML 保存到 vault 根目录，方便排查
-            try {
-                const debugPath = '_debug_mofa_output.html';
-                const debugContent = `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>MoFa Debug Output</title></head><body>\n${sanitizedHtml}\n</body></html>`;
-                const existing = this.app.vault.getAbstractFileByPath(debugPath);
-                if (existing instanceof TFile) {
-                    await this.app.vault.modify(existing, debugContent);
-                } else {
-                    await this.app.vault.create(debugPath, debugContent);
-                }
-                console.debug('[MoFa] 调试 HTML 已保存到:', debugPath);
-            } catch (debugErr) {
-                console.warn('[MoFa] 调试文件保存失败:', debugErr);
-            }
-
-            const res = await wxAddDraft(token, {
-                title,
-                author,
-                digest,
-                content: sanitizedHtml,
-                thumb_media_id: thumbMediaId,
-                need_open_comment: fm['open_comment'] === 'true' ? 1 : 0,
-            });
+            const requestPayload: DraftRequestPayload = {
+                ...context.requestPayloadBase,
+                content: context.sanitizedHtml,
+            };
+            const sent = await this.sendDraftCandidate(token, wxAddDraft, context.originalDocumentId, requestPayload);
+            const res = sent.res;
             console.debug('[MoFa] wxAddDraft 响应:', JSON.stringify(res.json));
+
+            await this.saveDraftAttemptArtifacts(
+                res.status === 200 && Boolean(res.json?.media_id) ? 'success' : 'fail',
+                context.title,
+                context.sanitizedHtml,
+                sent.debugInfo
+            );
 
             if (res.status !== 200) {
                 const errData = res.json;
@@ -553,6 +492,7 @@ export class MofaPublishView extends ItemView {
                     40155: '请勿添加其他公众号的主页链接',
                     44016: '内容过长（超过 20000 字），请精简后重试',
                     45002: '内容含无效字符（请移除特殊 HTML 标签或字符）',
+                    45003: '标题过长（已超过微信公众号标题长度限制）',
                     45021: '草稿数量已达上限（最多 100 篇），请到后台删除旧草稿',
                 };
                 const readable = wechatErrors[draft.errcode];
@@ -573,82 +513,485 @@ export class MofaPublishView extends ItemView {
     }
 
     /**
-     * 清洗 HTML 内容，移除微信草稿 API 不接受的元素
-     * 已知微信不接受：外链 <a>、<svg>、<script>、<style>、HTML 注释、控制字符
+     * 真实上传排除法：定位当前文档中触发 45166 的最小失败元素或元素组合
      */
-    private sanitizeForWechat(html: string): string {
-        let s = html;
+    async diagnoseWechatFailure() {
+        if (!this.plugin.settings.wechatAppId || !this.plugin.settings.wechatAppSecret) {
+            new Notice('⚙️ 请先在设置中填写公众号的 app ID 和 app secret');
+            return;
+        }
 
-        // 1. 外部链接 <a href="...">text</a> → 保留文字，去掉标签
-        s = s.replace(/<a\s+[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi,
-            (_m, href: string, text: string) => {
-                if (href.includes('weixin.qq.com') || href.includes('mp.weixin.qq.com')) {
-                    return _m; // 微信域名链接保留
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile) {
+            new Notice('请先打开一篇笔记');
+            return;
+        }
+
+        this.setStatus('开始定位 45166...');
+
+        try {
+            const { wxGetToken, wxUploadImage, wxAddDraft, wxBatchGetMaterial } = await import('./wechat/wechat-api');
+
+            this.setStatus('获取 Token...');
+            const token = await wxGetToken(
+                this.plugin.settings.wechatAppId,
+                this.plugin.settings.wechatAppSecret
+            );
+
+            const context = await this.prepareDraftContext(activeFile, token, wxUploadImage, wxBatchGetMaterial);
+            const attempts: BisectAttempt[] = [];
+
+            this.setStatus('验证完整文档是否复现...');
+            const fullAttempt = await this.testBisectCandidate(
+                token,
+                wxAddDraft,
+                context.originalDocumentId,
+                context.requestPayloadBase,
+                context.sanitizedHtml,
+                'full-document',
+                []
+            );
+            attempts.push(fullAttempt);
+
+            if (fullAttempt.result === 'pass') {
+                await this.saveBisectArtifacts(context.title, context.sanitizedHtml, {
+                    mode: 'wechat-45166-bisect',
+                    createdAt: new Date().toISOString(),
+                    originalDocumentId: context.originalDocumentId,
+                    title: context.title,
+                    status: 'not_reproduced',
+                    finalCandidates: [],
+                    attempts,
+                });
+                new Notice('✅ 当前完整文档已不再复现 45166');
+                this.setStatus('✅ 未复现 45166');
+                return;
+            }
+
+            if (fullAttempt.result === 'error') {
+                throw new Error(fullAttempt.errmsg || '完整文档未复现 45166，而是触发了其他错误');
+            }
+
+            let currentTarget = this.buildBisectTargetFromHtml(context.sanitizedHtml);
+            if (!currentTarget) {
+                await this.saveBisectArtifacts(context.title, context.sanitizedHtml, {
+                    mode: 'wechat-45166-bisect',
+                    createdAt: new Date().toISOString(),
+                    originalDocumentId: context.originalDocumentId,
+                    title: context.title,
+                    status: 'cannot_split',
+                    finalCandidates: [],
+                    attempts,
+                });
+                new Notice('⚠️ 当前 HTML 无法继续拆分，请查看 bisect 报告');
+                this.setStatus('⚠️ 无法拆分 HTML');
+                return;
+            }
+
+            let finalItems = [...currentTarget.items];
+            let finalHtml = context.sanitizedHtml;
+            let depth = 0;
+
+            while (depth < 6 && currentTarget.items.length > 0) {
+                const depthLabel = `depth-${depth + 1}`;
+                this.setStatus(`定位第 ${depth + 1} 层（${currentTarget.items.length} 块）...`);
+
+                const minimalSubset = await deltaDebug(currentTarget.items, async (subset) => {
+                    const subsetItems = [...subset];
+                    const html = this.renderBisectTarget(currentTarget as BisectTarget, subsetItems);
+                    const attempt = await this.testBisectCandidate(
+                        token,
+                        wxAddDraft,
+                        context.originalDocumentId,
+                        context.requestPayloadBase,
+                        html,
+                        `${depthLabel}-${subsetItems.length}`,
+                        subsetItems
+                    );
+                    attempts.push(attempt);
+
+                    if (attempt.result === 'error') {
+                        throw new Error(
+                            attempt.errcode
+                                ? `微信错误 ${attempt.errcode}: ${attempt.errmsg || '未知错误'}`
+                                : (attempt.errmsg || '排查中断')
+                        );
+                    }
+
+                    return attempt.result === 'fail-45166';
+                });
+
+                finalItems = [...minimalSubset];
+                finalHtml = this.renderBisectTarget(currentTarget, minimalSubset);
+
+                if (minimalSubset.length !== 1) {
+                    break;
                 }
-                return text;
+
+                const nextTarget = this.buildBisectTargetFromFragment(minimalSubset[0]);
+                if (!nextTarget) {
+                    break;
+                }
+
+                currentTarget = nextTarget;
+                depth++;
             }
+
+            await this.saveBisectArtifacts(context.title, finalHtml, {
+                mode: 'wechat-45166-bisect',
+                createdAt: new Date().toISOString(),
+                originalDocumentId: context.originalDocumentId,
+                title: context.title,
+                status: finalItems.length === 1 ? 'single-fragment' : 'fragment-combination',
+                finalCandidates: finalItems.map((item) => ({
+                    path: item.path,
+                    tagName: item.tagName,
+                    preview: item.preview,
+                })),
+                attempts,
+            });
+
+            if (finalItems.length === 1) {
+                new Notice(`🎯 已定位到疑似元素：<${finalItems[0].tagName}> ${finalItems[0].preview || finalItems[0].path}`, 12000);
+                this.setStatus('🎯 已定位到单个疑似元素');
+            } else {
+                new Notice(`🧩 已缩小到 ${finalItems.length} 个组合元素，详见 _mofa_debug/bisect`, 12000);
+                this.setStatus(`🧩 缩小到 ${finalItems.length} 个组合元素`);
+            }
+        } catch (error) {
+            console.error('[MoFa] 45166 排查失败:', error);
+            new Notice('❌ 排查失败: ' + (error as Error).message, 12000);
+            this.setStatus('❌ 排查失败');
+        }
+    }
+
+    private async prepareDraftContext(
+        activeFile: TFile,
+        token: string,
+        wxUploadImage: (data: Blob, filename: string, token: string, type?: string) => Promise<UploadResult>,
+        wxBatchGetMaterial: (token: string, type: string, offset?: number, count?: number) => Promise<any>
+    ): Promise<DraftPreparationContext> {
+        this.setStatus('渲染文章...');
+        const content = await this.app.vault.read(activeFile);
+        const rawHtml = this.renderer.render(content);
+        const htmlWithMermaid = await processMermaidBlocks(rawHtml, this.app, activeFile.path);
+
+        const theme = this.getSelectedTheme();
+        const themeCSS = theme?.css || '';
+        const articleHtml = `<div class="mofa-article">${htmlWithMermaid}</div>`;
+        console.debug('[MoFa] 渲染完成，HTML 长度:', articleHtml.length);
+
+        this.setStatus('上传图片...');
+        const htmlWithUploadedImages = await this.uploadAllImages(articleHtml, activeFile.path, token, wxUploadImage);
+        console.debug('[MoFa] 图片上传完成，HTML 长度:', htmlWithUploadedImages.length);
+
+        this.setStatus('适配微信格式...');
+        const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, { themeCSS });
+        console.debug('[MoFa] 微信兼容处理完成，HTML 长度:', wechatHtml.length);
+
+        const metadata = this.renderer.extractFrontmatter(content);
+        const fm = metadata.frontmatter;
+
+        let title = fm['title'];
+        if (!title) {
+            const h1Match = content.match(/^#\s+(.+)$/m);
+            title = h1Match ? h1Match[1].trim() : activeFile.basename;
+        }
+        const originalTitle = title;
+        title = normalizeWechatTitle(title);
+        if (title !== originalTitle) {
+            console.warn('[MoFa] 标题超出微信限制，已自动截断:', {
+                originalTitle,
+                normalizedTitle: title,
+            });
+        }
+
+        const author = fm['author'] || '';
+        const digest = fm['digest'] || '';
+
+        this.setStatus('处理封面...');
+        const thumbMediaId = await this.resolveThumbMediaId(
+            fm['thumb_media_id'] || '',
+            htmlWithUploadedImages,
+            activeFile,
+            token,
+            wxUploadImage,
+            wxBatchGetMaterial
         );
 
-        // 2. 锚点标签 <a id="xxx">...</a> / <a name="xxx">...</a>
-        s = s.replace(/<a\s+(?:id|name)="[^"]*"[^>]*>([\s\S]*?)<\/a>/gi, '$1');
-        // 自闭合锚点 <a id="xxx"/>
-        s = s.replace(/<a\s+(?:id|name)="[^"]*"[^>]*\/>/gi, '');
+        if (!thumbMediaId) {
+            throw new Error('文章内没有图片，且公众号后台无可用图片，无法生成封面');
+        }
 
-        // 3. <svg> 标签（微信不支持）→ 替换为 CSS 分割线
-        // processDividers 注入了 <section><svg>...</svg></section>，需要保留 section 但替换内容
-        s = s.replace(/<section([^>]*)>\s*<svg[\s\S]*?<\/svg>\s*<\/section>/gi,
-            '<section$1><hr style="border:none;border-top:1px solid #eee;margin:1.5em auto;width:80%;"></section>'
-        );
-        // 独立 <svg> 标签直接移除
-        s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '');
-
-        // 3.5 <math> / <semantics> MathML 标签（微信不支持）
-        s = s.replace(/<math[\s\S]*?<\/math>/gi, '');
-        s = s.replace(/<semantics[\s\S]*?<\/semantics>/gi, '');
-        // KaTeX annotation 标签
-        s = s.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/gi, '');
-
-        // 3.6 裸 markdown 文字泄露清理
-        s = s.replace(/\n---\n/g, '\n');
-        s = s.replace(/^---$/gm, '');
-
-        // 4. <script> / <style>
-        s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
-        s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
-
-        // 5. HTML 注释
-        s = s.replace(/<!--[\s\S]*?-->/g, '');
-
-        // 6. class 属性（代码高亮颜色已由 wechat-compat 转为 inline style）
-        s = s.replace(/\s+class="[^"]*"/gi, '');
-
-        // 7. data-* 属性
-        s = s.replace(/\s+data-[a-z-]+="[^"]*"/gi, '');
-
-        // 7.5 aria-* 属性（微信不支持）
-        s = s.replace(/\s+aria-[a-z-]+="[^"]*"/gi, '');
-
-        // 7.6 id 属性（脚注等产生的 id="fn1"，微信不需要）
-        s = s.replace(/\s+id="[^"]*"/gi, '');
-
-        // 7.7 <s> 标签 → 用 inline style 实现删除线
-        s = s.replace(/<s>([\s\S]*?)<\/s>/gi, '<span style="text-decoration:line-through;color:#999;">$1</span>');
-
-        // 8. 控制字符（保留 \t \n \r）
-        // eslint-disable-next-line no-control-regex
-        s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-
-        // 9. 移除未成功上传的图片（非 http/https src）
-        s = s.replace(/<img[^>]*\ssrc="([^"]*)"[^>]*>/gi, (match, src) => {
-            if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-                return match;
-            }
-            console.warn('[MoFa] 移除未上传的本地图片:', src);
-            return '';
+        const sanitizedHtml = sanitizeForWechat(wechatHtml, console);
+        console.debug('[MoFa] 清洗后 HTML 长度:', sanitizedHtml.length);
+        console.debug('[MoFa] 草稿参数:', {
+            title,
+            author,
+            digest: digest.slice(0, 50),
+            thumbMediaId,
+            contentLength: sanitizedHtml.length,
         });
 
-        console.debug('[MoFa] sanitizeForWechat 完成，内容长度:', s.length);
-        return s;
+        const adapter = this.app.vault.adapter;
+        const vaultBasePath = adapter instanceof FileSystemAdapter ? adapter.getBasePath() : undefined;
+
+        return {
+            activeFile,
+            title,
+            sanitizedHtml,
+            requestPayloadBase: {
+                title,
+                author,
+                digest,
+                thumb_media_id: thumbMediaId,
+                need_open_comment: fm['open_comment'] === 'true' ? 1 : 0,
+            },
+            originalDocumentId: resolveOriginalDocumentId(activeFile.path, vaultBasePath),
+        };
+    }
+
+    private async resolveThumbMediaId(
+        initialThumbMediaId: string,
+        htmlWithUploadedImages: string,
+        activeFile: TFile,
+        token: string,
+        wxUploadImage: (data: Blob, filename: string, token: string, type?: string) => Promise<UploadResult>,
+        wxBatchGetMaterial: (token: string, type: string, offset?: number, count?: number) => Promise<any>
+    ): Promise<string> {
+        let thumbMediaId = initialThumbMediaId;
+
+        if (!thumbMediaId) {
+            const uploadedDoc = new DOMParser().parseFromString(htmlWithUploadedImages, 'text/html');
+            const firstImg = uploadedDoc.body.querySelector('img');
+            if (firstImg) {
+                const src = firstImg.getAttribute('src') || '';
+                if (src) {
+                    this.setStatus('上传首图作为封面...');
+                    const blob = await this.fetchImageAsBlob(src, activeFile.path);
+                    if (blob) {
+                        const uploadRes = await wxUploadImage(blob, 'cover.png', token, 'image');
+                        if (uploadRes.media_id) {
+                            thumbMediaId = uploadRes.media_id;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!thumbMediaId) {
+            try {
+                const materials = await wxBatchGetMaterial(token, 'image');
+                if (materials.item_count > 0) {
+                    thumbMediaId = materials.item[0].media_id;
+                }
+            } catch (error) {
+                console.warn('获取默认封面失败:', error);
+            }
+        }
+
+        return thumbMediaId;
+    }
+
+    private async sendDraftCandidate(
+        token: string,
+        wxAddDraft: (token: string, data: DraftRequestPayload) => Promise<any>,
+        originalDocumentId: string,
+        requestPayload: DraftRequestPayload
+    ): Promise<{
+        res: any;
+        debugInfo: DraftDebugInfo;
+        result: 'pass' | 'fail-45166' | 'error';
+        errcode?: number;
+        errmsg?: string;
+    }> {
+        const requestTime = new Date().toISOString();
+        const res = await wxAddDraft(token, requestPayload);
+        const responseTime = new Date().toISOString();
+
+        const debugInfo = buildDraftDebugInfo({
+            requestTime,
+            responseTime,
+            originalDocumentId,
+            requestPayload,
+            jsonResponse: res.json,
+            httpStatus: res.status,
+        });
+
+        if (res.status === 200 && res.json?.media_id) {
+            return { res, debugInfo, result: 'pass' };
+        }
+
+        const errcode = typeof res.json?.errcode === 'number' ? res.json.errcode : undefined;
+        const errmsg = typeof res.json?.errmsg === 'string' ? res.json.errmsg : undefined;
+        return {
+            res,
+            debugInfo,
+            result: errcode === 45166 ? 'fail-45166' : 'error',
+            errcode,
+            errmsg,
+        };
+    }
+
+    private async testBisectCandidate(
+        token: string,
+        wxAddDraft: (token: string, data: DraftRequestPayload) => Promise<any>,
+        originalDocumentId: string,
+        requestPayloadBase: DraftPayloadBase,
+        html: string,
+        label: string,
+        fragments: BisectItem[]
+    ): Promise<BisectAttempt> {
+        const requestPayload: DraftRequestPayload = {
+            ...requestPayloadBase,
+            content: html,
+        };
+
+        const sent = await this.sendDraftCandidate(token, wxAddDraft, originalDocumentId, requestPayload);
+        return {
+            label,
+            result: sent.result,
+            errcode: sent.errcode,
+            errmsg: sent.errmsg,
+            fragments: fragments.map((fragment) => ({
+                path: fragment.path,
+                tagName: fragment.tagName,
+                preview: fragment.preview,
+            })),
+            debugInfo: sent.debugInfo,
+        };
+    }
+
+    private async saveDraftAttemptArtifacts(
+        subDir: 'success' | 'fail',
+        title: string,
+        html: string,
+        debugInfo: DraftDebugInfo
+    ) {
+        const folderPath = await this.ensureDebugFolder(subDir);
+        const baseName = this.buildDebugBaseName(title);
+        const htmlPath = `${folderPath}/${baseName}.html`;
+        const debugJsonPath = `${folderPath}/${baseName}_FullDebugLog.json`;
+
+        await this.app.vault.create(htmlPath, this.wrapDebugHtml(html));
+        await this.app.vault.create(debugJsonPath, JSON.stringify(debugInfo, null, 2));
+    }
+
+    private async saveBisectArtifacts(title: string, html: string, report: Record<string, unknown>) {
+        const folderPath = await this.ensureDebugFolder('bisect');
+        const baseName = this.buildDebugBaseName(title);
+        await this.app.vault.create(`${folderPath}/${baseName}.html`, this.wrapDebugHtml(html));
+        await this.app.vault.create(`${folderPath}/${baseName}.json`, JSON.stringify(report, null, 2));
+    }
+
+    private async ensureDebugFolder(subDir: string): Promise<string> {
+        const folderPath = `${this.debugLogDir}/${subDir}`;
+        if (!this.app.vault.getAbstractFileByPath(this.debugLogDir)) {
+            await this.app.vault.createFolder(this.debugLogDir);
+        }
+        if (!this.app.vault.getAbstractFileByPath(folderPath)) {
+            await this.app.vault.createFolder(folderPath);
+        }
+        return folderPath;
+    }
+
+    private buildDebugBaseName(title: string): string {
+        const safeTitle = title.replace(/[/\\?%*:|"<>]/g, '-').substring(0, 30);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        return `${safeTitle}_${timestamp}`;
+    }
+
+    private wrapDebugHtml(html: string): string {
+        return `<!DOCTYPE html>\n<html><head><meta charset="utf-8"><title>MoFa Debug Output</title></head><body>\n${html}\n</body></html>`;
+    }
+
+    private buildBisectTargetFromHtml(html: string): BisectTarget | null {
+        const doc = new DOMParser().parseFromString(`<div data-mofa-bisect-root="1">${html}</div>`, 'text/html');
+        const root = doc.body.querySelector('[data-mofa-bisect-root="1"]');
+        if (!(root instanceof HTMLElement)) {
+            return null;
+        }
+
+        const article = root.querySelector('.mofa-article');
+        if (article instanceof HTMLElement) {
+            return this.buildBisectTargetFromElement(article, '.mofa-article');
+        }
+
+        return this.buildBisectTargetFromElement(root, 'root');
+    }
+
+    private buildBisectTargetFromFragment(item: BisectItem): BisectTarget | null {
+        const doc = new DOMParser().parseFromString(`<div data-mofa-bisect-root="1">${item.html}</div>`, 'text/html');
+        const root = doc.body.querySelector('[data-mofa-bisect-root="1"]');
+        if (!(root instanceof HTMLElement)) {
+            return null;
+        }
+
+        const meaningfulChildren = Array.from(root.childNodes).filter((node) => this.isMeaningfulNode(node));
+        if (meaningfulChildren.length === 1 && meaningfulChildren[0].nodeType === Node.ELEMENT_NODE) {
+            return this.buildBisectTargetFromElement(meaningfulChildren[0] as Element, item.path);
+        }
+
+        return this.buildBisectTargetFromElement(root, item.path);
+    }
+
+    private buildBisectTargetFromElement(element: Element, path: string): BisectTarget | null {
+        const children = Array.from(element.childNodes).filter((node) => this.isMeaningfulNode(node));
+        if (children.length < 2) {
+            return null;
+        }
+
+        const { start, end } = this.buildElementShell(element);
+        return {
+            path,
+            wrapperStart: start,
+            wrapperEnd: end,
+            items: children.map((node, index) => this.nodeToBisectItem(node, path, index)),
+        };
+    }
+
+    private buildElementShell(element: Element): { start: string; end: string } {
+        const emptyClone = element.cloneNode(false);
+        const serialized = this.serializeNode(emptyClone);
+        const closingTag = `</${element.tagName.toLowerCase()}>`;
+        if (serialized.endsWith(closingTag)) {
+            return {
+                start: serialized.slice(0, -closingTag.length),
+                end: closingTag,
+            };
+        }
+        return { start: serialized, end: '' };
+    }
+
+    private nodeToBisectItem(node: Node, parentPath: string, index: number): BisectItem {
+        const html = this.serializeNode(node);
+        const tagName = node.nodeType === Node.ELEMENT_NODE
+            ? (node as Element).tagName.toLowerCase()
+            : '#text';
+
+        return {
+            html,
+            path: `${parentPath}[${index}]`,
+            tagName,
+            preview: clipPreviewText(node.textContent || ''),
+        };
+    }
+
+    private renderBisectTarget(target: BisectTarget, items: readonly BisectItem[]): string {
+        return `${target.wrapperStart}${items.map((item) => item.html).join('')}${target.wrapperEnd}`;
+    }
+
+    private isMeaningfulNode(node: Node): boolean {
+        if (node.nodeType === Node.TEXT_NODE) {
+            return Boolean(node.textContent?.trim());
+        }
+        return true;
+    }
+
+    private serializeNode(node: Node): string {
+        return new XMLSerializer()
+            .serializeToString(node)
+            .replace(/ xmlns="http:\/\/www\.w3\.org\/1999\/xhtml"/g, '');
     }
 
     /**
