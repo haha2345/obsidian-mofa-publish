@@ -602,6 +602,16 @@ export class MofaPublishView extends ItemView {
         // 独立 <svg> 标签直接移除
         s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '');
 
+        // 3.5 <math> MathML 标签（微信不支持，KaTeX 的 aria-hidden span 已是可视化回退）
+        s = s.replace(/<math[\s\S]*?<\/math>/gi, '');
+        // KaTeX annotation 标签
+        s = s.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/gi, '');
+
+        // 3.6 裸 markdown 文字泄露清理
+        // 独立行的 --- 分隔线（应被 markdown-it 处理但因位于 HTML 块后未被识别）
+        s = s.replace(/\n---\n/g, '\n');
+        s = s.replace(/^---$/gm, '');
+
         // 4. <script> / <style>
         s = s.replace(/<script[\s\S]*?<\/script>/gi, '');
         s = s.replace(/<style[\s\S]*?<\/style>/gi, '');
