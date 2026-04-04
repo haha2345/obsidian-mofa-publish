@@ -65,6 +65,10 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         // 4. 处理代码块
         processCodeBlocks(container);
 
+        // 4.5 将 CSS 中的 ::before 伪元素转为真实 DOM（微信不支持伪元素）
+        injectPseudoBeforeContent(container, allCSS);
+        injectCodeBlockDots(container, allCSS);
+
         // 5. 处理图片
         processImages(container);
 
@@ -123,6 +127,109 @@ function compactListHTML(html: string): string {
     html = html.replace(/<li[^>]*>\s*<\/li>/gi, '');
 
     return html;
+}
+
+/**
+ * 将 CSS 中带文字 content 的 ::before 伪元素转为真实 <span> DOM 节点。
+ * 微信编辑器完全不支持伪元素，此函数解析 CSS 中的 ::before 规则并注入内联元素。
+ *
+ * 示例：`.mofa-article h3::before { content: "■"; color: #2F54EB; }`
+ * 会在每个 h3 前面插入 <span style="color:#2F54EB;display:inline-block">■</span>
+ */
+function injectPseudoBeforeContent(container: HTMLElement, cssText: string) {
+    const beforeRegex = /([^{}]+)::before\s*\{([^{}]+)\}/g;
+    let match;
+    while ((match = beforeRegex.exec(cssText)) !== null) {
+        let selector = match[1].trim();
+        const declarations = match[2];
+
+        // 只处理有实际文字 content 的（跳过 content:'' 纯视觉圆点等）
+        const contentMatch = declarations.match(/content:\s*["']([^"']+)["']/);
+        if (!contentMatch) continue;
+        const content = contentMatch[1];
+        if (!content) continue;
+
+        // 收集除 content 以外的 CSS 属性（color、margin-right 等）
+        const otherProps: string[] = [];
+        declarations.split(';').forEach((decl) => {
+            const t = decl.trim();
+            if (!t || /^content\s*:/i.test(t)) return;
+            otherProps.push(t);
+        });
+
+        // 清理选择器前缀
+        if (selector.startsWith('.mofa-article ')) {
+            selector = selector.replace('.mofa-article ', '').trim();
+        }
+
+        try {
+            container.querySelectorAll(selector).forEach((el) => {
+                // 防止重复注入
+                if (el.querySelector('.mofa-pseudo-before')) return;
+                const span = document.createElement('span');
+                span.className = 'mofa-pseudo-before';
+                span.textContent = content;
+                // inline-block 确保 color / margin 等生效
+                span.style.setProperty('display', 'inline-block');
+                otherProps.forEach((prop) => {
+                    const ci = prop.indexOf(':');
+                    if (ci > 0) {
+                        span.style.setProperty(prop.slice(0, ci).trim(), prop.slice(ci + 1).trim());
+                    }
+                });
+                (el as HTMLElement).prepend(span);
+            });
+        } catch {
+            // 无效选择器，忽略
+        }
+    }
+}
+
+/**
+ * 将 pre::before 的 CSS 三色圆点装饰（macOS 红黄绿风格）转为真实 DOM 元素。
+ * 原始技术：background + box-shadow 偏移实现三个圆点，微信不支持。
+ * 替换为：三个真实 <span> 元素内联排列。
+ */
+function injectCodeBlockDots(container: HTMLElement, cssText: string) {
+    // 检测是否存在 pre::before 且含 box-shadow（三色圆点装饰的特征）
+    const preBeforeMatch = cssText.match(/pre::before\s*\{([^}]+)\}/);
+    if (!preBeforeMatch) return;
+    const decls = preBeforeMatch[1];
+    if (!decls.includes('box-shadow')) return;
+
+    // 从 background 提取第一个圆点色，从 box-shadow 提取后两个
+    const bgMatch = decls.match(/background(?:-color)?:\s*(#[0-9a-fA-F]{3,8})/);
+    const shadowMatches = [...decls.matchAll(/#([0-9a-fA-F]{3,8})/g)].map((m) => `#${m[1]}`);
+    // 去掉背景色自身，剩余的就是 box-shadow 中的颜色
+    const firstColor = bgMatch ? bgMatch[1] : '#ff5f56';
+    const shadowColors = shadowMatches.filter((c) => c !== firstColor).slice(0, 2);
+    const dotColors = [firstColor, ...shadowColors];
+    // 保底：如果解析失败就用默认三色
+    while (dotColors.length < 3) dotColors.push(['#ffbd2e', '#27c93f'][dotColors.length - 1] ?? '#ccc');
+
+    container.querySelectorAll('pre').forEach((pre) => {
+        // 防止重复注入
+        if (pre.querySelector('.mofa-code-dots')) return;
+
+        const dotsRow = document.createElement('div');
+        dotsRow.className = 'mofa-code-dots';
+        dotsRow.style.setProperty('display', 'block');
+        dotsRow.style.setProperty('margin-bottom', '12px');
+        dotsRow.style.setProperty('line-height', '1');
+
+        dotColors.forEach((color) => {
+            const dot = document.createElement('span');
+            dot.style.setProperty('display', 'inline-block');
+            dot.style.setProperty('width', '12px');
+            dot.style.setProperty('height', '12px');
+            dot.style.setProperty('border-radius', '50%');
+            dot.style.setProperty('background-color', color);
+            dot.style.setProperty('margin-right', '6px');
+            dotsRow.appendChild(dot);
+        });
+
+        pre.prepend(dotsRow);
+    });
 }
 
 /**
