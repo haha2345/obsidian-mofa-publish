@@ -26,6 +26,7 @@ export function getBuiltinThemes(): Theme[] {
         { id: 'ink', name: '🖌️ 水墨', css: inkTheme, category: 'elegant' },
         { id: 'orange', name: '🍊 暖橙', css: orangeTheme, category: 'elegant' },
         // ── 技术系列 ──
+        { id: 'geek', name: '🤓 极客手稿', css: geekTheme, category: 'tech' },
         { id: 'sspai', name: '📱 少数派', css: sspaiTheme, category: 'tech' },
         { id: 'rainbow', name: '🌈 彩虹糖', css: rainbowTheme, category: 'creative' },
         // ── 新增高级系列 ──
@@ -388,6 +389,35 @@ const paperTheme = `
 .mofa-article hr { border: none; border-top: 1px solid #999; margin: 2em 0; }
 .mofa-article img { border-radius: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.2); }
 .mofa-article a { color: #333; text-decoration: underline; }
+`;
+
+// ---- 16. 极客手稿 ----
+const geekTheme = `
+.mofa-article {
+    ${baseTypography}
+    color: #333333;
+    background-color: #ffffff;
+    background-image: linear-gradient(#f0f4ff 1px, transparent 1px), linear-gradient(90deg, #f0f4ff 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-position: center top;
+    padding: 20px 18px;
+}
+.mofa-article h1 { font-size: 22px; margin-bottom: 20px; font-weight: bold; color: #1a1a1a; line-height: 1.4; text-align: center; }
+.mofa-article h2 { font-size: 18px; color: #2F54EB; border-left: 5px solid #2F54EB; padding-left: 12px; margin-top: 35px; margin-bottom: 20px; font-weight: bold; background: linear-gradient(to right, #F0F5FF 0%, rgba(255,255,255,0) 100%); line-height: 1.4; padding-top: 6px; padding-bottom: 6px; }
+.mofa-article h3 { font-size: 16px; color: #1a1a1a; margin-top: 25px; margin-bottom: 15px; font-weight: bold; padding-bottom: 5px; border-bottom: 1px dashed #e4e7ed; }
+.mofa-article h3::before { content: "■"; color: #2F54EB; margin-right: 8px; font-size: 0.7em; vertical-align: middle; }
+.mofa-article p { margin: 0 0 18px 0; text-align: justify; word-break: break-all; }
+.mofa-article strong { color: #2F54EB; font-weight: bold; }
+.mofa-article blockquote { margin: 0 0 20px 0; padding: 16px; background-color: #F8FAFF; border-left: 4px solid #2F54EB; border-radius: 0 8px 8px 0; color: #595959; font-size: 14px; box-shadow: 0 2px 8px rgba(47,84,235,0.04); }
+.mofa-article blockquote p:last-child { margin-bottom: 0; }
+.mofa-article ul, .mofa-article ol { margin: 0 0 20px 0; padding-left: 20px; color: #333; }
+.mofa-article li { margin-bottom: 8px; }
+.mofa-article li::marker { color: #2F54EB; }
+.mofa-article p code, .mofa-article li code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 13.5px; background-color: #f7f7f9; color: #d63384; padding: 2px 6px; border-radius: 4px; margin: 0 3px; word-break: break-all; }
+.mofa-article pre { margin: 0 0 20px 0; background-color: #21252b !important; border-radius: 8px; padding: 16px; overflow-x: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); position: relative; }
+.mofa-article pre::before { content: ''; display: block; width: 12px; height: 12px; border-radius: 50%; background: #ff5f56; box-shadow: 20px 0 0 #ffbd2e, 40px 0 0 #27c93f; margin-bottom: 16px; }
+.mofa-article pre code:not(.hljs) { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 13.5px; color: #abb2bf; line-height: 1.5; white-space: pre; background: transparent; padding: 0; }
+.mofa-article img { border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
 `;
 
 // ============================================================
