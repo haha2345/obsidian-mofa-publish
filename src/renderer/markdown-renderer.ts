@@ -86,7 +86,7 @@ export class MarkdownRenderer {
         //    ![[image.png|alt文字]] → ![alt文字](image.png)
         let processed = this.preprocessWikiImages(content);
 
-        // 2.5 预处理 Obsidian Callout 语法（> [!NOTE] 等）为 HTML
+        // 2.5 预处理 Obsidian Callout 语法（在 md.render 之前，body 用 md.render 内联渲染）
         processed = this.preprocessCallouts(processed);
 
         // 3. 处理链接（微信不支持外链）
@@ -114,27 +114,22 @@ export class MarkdownRenderer {
             html = this.resolveImagePaths(html, sourcePath);
         }
 
+        // 4.2 后处理 Obsidian Callout（将渲染后的 blockquote[!TYPE] 转为样式 div）
+        html = this.postProcessCallouts(html);
+
         return html;
     }
 
     /**
-     * 将 Obsidian Callout 语法转换为 HTML div
+     * 将 Obsidian Callout 语法转换为已渲染的 HTML div
      * 格式：> [!TYPE] 标题\n> 内容
-     * 支持类型：NOTE / TIP / IMPORTANT / WARNING / CAUTION
+     * 在 md.render 之前调用，body markdown 单独用 this.md.render() 渲染为 HTML
      */
     private preprocessCallouts(markdown: string): string {
         const calloutIcons: Record<string, string> = {
-            NOTE: '📖',
-            TIP: '💡',
-            IMPORTANT: '❗',
-            WARNING: '⚠️',
-            CAUTION: '🔥',
-            INFO: 'ℹ️',
-            SUCCESS: '✅',
-            ERROR: '❌',
-            QUESTION: '❓',
-            QUOTE: '💬',
-            ABSTRACT: '📌',
+            NOTE: '📖', TIP: '💡', IMPORTANT: '❗', WARNING: '⚠️',
+            CAUTION: '🔥', INFO: 'ℹ️', SUCCESS: '✅', ERROR: '❌',
+            QUESTION: '❓', QUOTE: '💬', ABSTRACT: '📌',
         };
         const calloutColors: Record<string, string> = {
             NOTE: '#e0f0ff', TIP: '#e6f9e6', IMPORTANT: '#f0e0ff',
@@ -149,34 +144,50 @@ export class MarkdownRenderer {
             QUOTE: '#aaa', ABSTRACT: '#a855f7',
         };
 
-        // 匹配整个 callout 块：以 "> [!TYPE]" 开头，连续的 "> " 行为内容
+        // 匹配整个 callout 块：
+        // 第一行：    > [!TYPE] 可选标题
+        // 后续内容行：> 内容（可选，可为空）
         return markdown.replace(
-            /^(>\s*\[!(\w+)\]([^\n]*)(?:\n>[^\n]*)*)/gm,
-            (block) => {
-                const lines = block.split('\n');
-                const firstLine = lines[0];
-                const typeMatch = firstLine.match(/^>\s*\[!(\w+)\]\s*(.*)/);
-                if (!typeMatch) return block;
-
-                const type = typeMatch[1].toUpperCase();
-                const titleText = typeMatch[2].trim();
+            /^> \[!(\w+)\]([^\n]*)\n((?:> ?[^\n]*\n?)*)/gm,
+            (_match, rawType, rawTitle, bodyBlock) => {
+                const type = rawType.trim().toUpperCase();
+                const titleText = rawTitle.trim();
                 const icon = calloutIcons[type] || '📖';
                 const bg = calloutColors[type] || '#e0f0ff';
                 const border = calloutBorder[type] || '#3b82f6';
                 const displayTitle = titleText || type;
 
-                // 提取内容行（去掉开头 > ）
-                const bodyLines = lines.slice(1).map((l) => l.replace(/^>\s?/, ''));
-                const body = bodyLines.join('\n').trim();
+                // 去掉每行开头的 "> " 前缀，得到原始 markdown 内容
+                const bodyMarkdown = bodyBlock
+                    .split('\n')
+                    .map((l: string) => l.replace(/^> ?/, ''))
+                    .join('\n')
+                    .trim();
+
+                // 用 this.md.render() 立即将 body markdown 渲染为 HTML
+                // 这样主 md.render 不会对这段内容二次处理（它会把 <div>...</div> 作为 HTML 块直接通过）
+                const bodyHtml = bodyMarkdown ? this.md.render(bodyMarkdown) : '';
 
                 return [
                     `<div class="mofa-callout" style="background:${bg};border-left:4px solid ${border};border-radius:4px;padding:12px 16px;margin:1em 0;">`,
-                    `<div class="mofa-callout-title" style="font-weight:700;margin-bottom:${body ? '6px' : '0'};">${icon} ${displayTitle}</div>`,
-                    body ? `<div class="mofa-callout-body">${body}</div>` : '',
+                    `<p class="mofa-callout-title" style="font-weight:700;margin:0 0 ${bodyHtml ? '6px' : '0'} 0;">${icon} ${displayTitle}</p>`,
+                    bodyHtml ? `<div class="mofa-callout-body" style="margin:0;">${bodyHtml}</div>` : '',
                     `</div>`,
+                    '',
                 ].filter(Boolean).join('\n');
             }
         );
+    }
+
+    /**
+     * 后处理：将 md.render 输出中剩余的封装 callout 的 blockquote 净化
+     * （处理 preprocessCallouts 未能匹配到的边界情况）
+     */
+    private postProcessCallouts(html: string): string {
+        // 将未匹配到的 [!TYPE] 明文清除（防止显示为文字）
+        html = html.replace(/<p>\[!(\w+)\]<\/p>/gi, '');
+        html = html.replace(/\[!(\w+)\]/g, '');
+        return html;
     }
 
     /**

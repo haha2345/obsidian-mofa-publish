@@ -522,8 +522,22 @@ export class MofaPublishView extends ItemView {
             if (draft.media_id) {
                 new Notice('✅ 已发送到草稿箱！请到公众号后台查看');
                 this.setStatus('✅ 发布成功！');
+            } else if (draft.errcode) {
+                // 解码微信错误码
+                const wechatErrors: Record<number, string> = {
+                    40007: '媒体文件ID无效（thumb_media_id 错误或已过期）',
+                    40155: '请勿添加其他公众号的主页链接',
+                    44016: '内容过长（超过 20000 字），请精简后重试',
+                    45002: '内容含无效字符（请移除特殊 HTML 标签或字符）',
+                    45021: '草稿数量已达上限（最多 100 篇），请到后台删除旧草稿',
+                };
+                const readable = wechatErrors[draft.errcode];
+                const errMsg = readable
+                    ? `[${draft.errcode}] ${readable}`
+                    : `微信错误 ${draft.errcode}: ${draft.errmsg}`;
+                throw new Error(errMsg);
             } else {
-                throw new Error(draft.errmsg || '创建草稿失败');
+                throw new Error(draft.errmsg || '创建草稿失败（未知错误）');
             }
 
         } catch (error) {
