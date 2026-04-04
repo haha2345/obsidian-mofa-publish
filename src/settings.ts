@@ -122,7 +122,7 @@ export class MofaSettingTab extends PluginSettingTab {
             .setDesc('微信公众号的 app ID')
             .addText((text) =>
                 text
-                    .setPlaceholder('wx1234567890abcdef')
+                    .setPlaceholder('wx1234567890')
                     .setValue(this.plugin.settings.wechatAppId)
                     .onChange(async (value) => {
                         this.plugin.settings.wechatAppId = value;
@@ -146,7 +146,7 @@ export class MofaSettingTab extends PluginSettingTab {
         // 测试连接按钮
         new Setting(containerEl)
             .setName('测试连接')
-            .setDesc('验证 AppID 和 AppSecret 是否正确')
+            .setDesc('验证 app ID 和 app secret 是否正确')
             .addButton((button) =>
                 button
                     .setButtonText('🔗 测试连接')
