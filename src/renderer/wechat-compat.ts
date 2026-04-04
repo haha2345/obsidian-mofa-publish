@@ -552,9 +552,43 @@ function injectMarkerStyles(container: HTMLElement, cssText: string) {
 }
 
 function processCodeBlocks(container: HTMLElement, cssText = '') {
+    // hljs class → inline color 映射（One Dark 主题配色）
+    const hljsColors: Record<string, string> = {
+        'hljs-keyword': '#c678dd',
+        'hljs-built_in': '#e6c07b',
+        'hljs-type': '#e6c07b',
+        'hljs-literal': '#d19a66',
+        'hljs-number': '#d19a66',
+        'hljs-string': '#98c379',
+        'hljs-template-string': '#98c379',
+        'hljs-regexp': '#98c379',
+        'hljs-symbol': '#61aeee',
+        'hljs-variable': '#e06c75',
+        'hljs-attr': '#d19a66',
+        'hljs-attribute': '#d19a66',
+        'hljs-params': '#e06c75',
+        'hljs-comment': '#5c6370',
+        'hljs-doctag': '#c678dd',
+        'hljs-meta': '#61aeee',
+        'hljs-section': '#e06c75',
+        'hljs-tag': '#e06c75',
+        'hljs-name': '#e06c75',
+        'hljs-selector-tag': '#e06c75',
+        'hljs-selector-id': '#61aeee',
+        'hljs-selector-class': '#e6c07b',
+        'hljs-title': '#61aeee',
+        'hljs-function': '#61aeee',
+        'hljs-class': '#e6c07b',
+        'hljs-property': '#61aeee',
+        'hljs-punctuation': '#abb2bf',
+        'hljs-operator': '#56b6c2',
+        'hljs-addition': '#98c379',
+        'hljs-deletion': '#e06c75',
+    };
+
     container.querySelectorAll('pre.mofa-code-block').forEach((pre) => {
         const preEl = pre as HTMLElement;
-        ss(preEl, 'background-color', '#1e1e1e');
+        ss(preEl, 'background-color', '#21252b');
         ss(preEl, 'color', '#d4d4d4');
         ss(preEl, 'padding', '16px', true);
         ss(preEl, 'border-radius', '8px', true);
@@ -562,6 +596,15 @@ function processCodeBlocks(container: HTMLElement, cssText = '') {
         ss(preEl, 'font-size', '13px');
         ss(preEl, 'line-height', '1.6', true);
         ss(preEl, 'margin-bottom', '1em', true);
+        ss(preEl, 'box-shadow', '0 4px 12px rgba(0,0,0,0.1)', true);
+        ss(preEl, 'position', 'relative', true);
+
+        // 将 hljs 的 class 转为 inline color（sanitizer 会删除 class）
+        for (const [cls, color] of Object.entries(hljsColors)) {
+            preEl.querySelectorAll(`.${cls}`).forEach((el) => {
+                (el as HTMLElement).style.setProperty('color', color);
+            });
+        }
     });
 
     container.querySelectorAll(':not(pre) > code').forEach((code) => {

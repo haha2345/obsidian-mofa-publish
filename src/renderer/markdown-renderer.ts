@@ -81,27 +81,20 @@ export class MarkdownRenderer {
         const { content } = this.extractFrontmatter(markdown);
 
         // 2. 预处理 Obsidian wiki-link 图片语法
-        //    ![[image.png]]        → ![](image.png)
-        //    ![[image.png|300]]    → ![](image.png){width=300}
-        //    ![[image.png|alt文字]] → ![alt文字](image.png)
-        let processed = this.preprocessWikiImages(content);
-
-        // 2.5 预处理 Obsidian Callout 语法（在 md.render 之前，body 用 md.render 内联渲染）
-        processed = this.preprocessCallouts(processed);
+        const processed = this.preprocessWikiImages(content);
 
         // 3. 处理链接（微信不支持外链）
+        let readyMarkdown = processed;
         if (this.settings.linkStyle === 'footnote') {
-            processed = processLinksToFootnotes(processed);
+            readyMarkdown = processLinksToFootnotes(readyMarkdown);
         }
 
         // 4. 渲染 Markdown → HTML
-        let html = this.md.render(processed);
+        let html = this.md.render(readyMarkdown);
 
         // 4.1 清理空的列表项（breaks:true 导致的各种空 li）
-        // 匹配：<li></li>, <li>\n</li>, <li><br></li>, <li><p></p></li>, <li><p><br></p></li>
         html = html.replace(/<li>\s*(<br\s*\/?>)?\s*<\/li>/gi, '');
         html = html.replace(/<li>\s*<p>\s*(<br\s*\/?>)?\s*<\/p>\s*<\/li>/gi, '');
-        // 清理空行产生的多余换行
         html = html.replace(/\n{3,}/g, '\n\n');
 
         // 5. 如果是 inline 链接模式，后处理 HTML
@@ -114,18 +107,20 @@ export class MarkdownRenderer {
             html = this.resolveImagePaths(html, sourcePath);
         }
 
-        // 4.2 后处理 Obsidian Callout（将渲染后的 blockquote[!TYPE] 转为样式 div）
-        html = this.postProcessCallouts(html);
+        // 7. 后处理 Obsidian Callout（将渲染后的 blockquote 含 [!TYPE] 转为样式 div）
+        html = this.postRenderCallouts(html);
 
         return html;
     }
 
     /**
-     * 将 Obsidian Callout 语法转换为已渲染的 HTML div
-     * 格式：> [!TYPE] 标题\n> 内容
-     * 在 md.render 之前调用，body markdown 单独用 this.md.render() 渲染为 HTML
+     * 后处理 Obsidian Callout：在 md.render() 输出的 HTML 中，
+     * 检测 <blockquote> 内的 [!TYPE] 标记，替换为美化的 styled div。
+     *
+     * markdown-it 将 > [!NOTE] 标题\n> 内容 渲染为：
+     * <blockquote><p>[!NOTE] 标题<br>内容行...</p></blockquote>
      */
-    private preprocessCallouts(markdown: string): string {
+    private postRenderCallouts(html: string): string {
         const calloutIcons: Record<string, string> = {
             NOTE: '📖', TIP: '💡', IMPORTANT: '❗', WARNING: '⚠️',
             CAUTION: '🔥', INFO: 'ℹ️', SUCCESS: '✅', ERROR: '❌',
@@ -144,50 +139,31 @@ export class MarkdownRenderer {
             QUOTE: '#aaa', ABSTRACT: '#a855f7',
         };
 
-        // 匹配整个 callout 块：
-        // 第一行：    > [!TYPE] 可选标题
-        // 后续内容行：> 内容（可选，可为空）
-        return markdown.replace(
-            /^> \[!(\w+)\]([^\n]*)\n((?:> ?[^\n]*\n?)*)/gm,
-            (_match, rawType, rawTitle, bodyBlock) => {
+        // 匹配 <blockquote>...[!TYPE]...</blockquote>
+        return html.replace(
+            /<blockquote[^>]*>\s*<p[^>]*>\[!(\w+)\]\s*([^<]*?)(?:<br\s*\/?>)?\s*([\s\S]*?)<\/p>([\s\S]*?)<\/blockquote>/gi,
+            (_match, rawType, titleText, firstBody, restBody) => {
                 const type = rawType.trim().toUpperCase();
-                const titleText = rawTitle.trim();
                 const icon = calloutIcons[type] || '📖';
                 const bg = calloutColors[type] || '#e0f0ff';
                 const border = calloutBorder[type] || '#3b82f6';
-                const displayTitle = titleText || type;
+                const displayTitle = titleText.trim() || type;
 
-                // 去掉每行开头的 "> " 前缀，得到原始 markdown 内容
-                const bodyMarkdown = bodyBlock
-                    .split('\n')
-                    .map((l: string) => l.replace(/^> ?/, ''))
-                    .join('\n')
-                    .trim();
-
-                // 用 this.md.render() 立即将 body markdown 渲染为 HTML
-                // 这样主 md.render 不会对这段内容二次处理（它会把 <div>...</div> 作为 HTML 块直接通过）
-                const bodyHtml = bodyMarkdown ? this.md.render(bodyMarkdown) : '';
+                // 组装 body
+                let bodyContent = '';
+                const body = (firstBody + restBody).trim();
+                if (body) {
+                    bodyContent = `<div style="margin:0;">${body}</div>`;
+                }
 
                 return [
-                    `<div class="mofa-callout" style="background:${bg};border-left:4px solid ${border};border-radius:4px;padding:12px 16px;margin:1em 0;">`,
-                    `<p class="mofa-callout-title" style="font-weight:700;margin:0 0 ${bodyHtml ? '6px' : '0'} 0;">${icon} ${displayTitle}</p>`,
-                    bodyHtml ? `<div class="mofa-callout-body" style="margin:0;">${bodyHtml}</div>` : '',
+                    `<div style="background:${bg};border-left:4px solid ${border};border-radius:4px;padding:12px 16px;margin:1em 0;">`,
+                    `<p style="font-weight:700;margin:0 0 ${bodyContent ? '6px' : '0'} 0;">${icon} ${displayTitle}</p>`,
+                    bodyContent,
                     `</div>`,
-                    '',
                 ].filter(Boolean).join('\n');
             }
         );
-    }
-
-    /**
-     * 后处理：将 md.render 输出中剩余的封装 callout 的 blockquote 净化
-     * （处理 preprocessCallouts 未能匹配到的边界情况）
-     */
-    private postProcessCallouts(html: string): string {
-        // 将未匹配到的 [!TYPE] 明文清除（防止显示为文字）
-        html = html.replace(/<p>\[!(\w+)\]<\/p>/gi, '');
-        html = html.replace(/\[!(\w+)\]/g, '');
-        return html;
     }
 
     /**
@@ -215,16 +191,13 @@ export class MarkdownRenderer {
 
     /**
      * 将 HTML 中的图片 src 解析为 Obsidian 资源路径
-     * 这样预览面板中的图片才能正常显示
      */
     private resolveImagePaths(html: string, sourcePath: string): string {
         return html.replace(/<img([^>]*)\ssrc="([^"]*)"([^>]*)>/gi, (match, before, src, after) => {
-            // 跳过已经是完整 URL 或 data URI 的
             if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
                 return match;
             }
 
-            // 尝试解析为 Vault 内文件
             const resolved = this.resolveVaultImagePath(src, sourcePath);
             if (resolved) {
                 return `<img${before} src="${resolved}"${after}>`;
@@ -239,20 +212,22 @@ export class MarkdownRenderer {
      */
     private resolveVaultImagePath(imagePath: string, sourcePath: string): string | null {
         const vault = this.app.vault;
+        // URL 解码（markdown-it 会将中文路径编码为 %XX）
+        const decoded = decodeURIComponent(imagePath);
 
         // 1. 尝试直接路径
-        let file = vault.getAbstractFileByPath(imagePath);
+        let file = vault.getAbstractFileByPath(decoded);
 
         // 2. 尝试相对路径
         if (!file) {
             const sourceDir = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
-            const relativePath = sourceDir ? `${sourceDir}/${imagePath}` : imagePath;
+            const relativePath = sourceDir ? `${sourceDir}/${decoded}` : decoded;
             file = vault.getAbstractFileByPath(relativePath);
         }
 
         // 3. 尝试 Obsidian 链接解析（处理不带路径的文件名）
         if (!file) {
-            const linkedFile = this.app.metadataCache.getFirstLinkpathDest(imagePath, sourcePath);
+            const linkedFile = this.app.metadataCache.getFirstLinkpathDest(decoded, sourcePath);
             if (linkedFile) {
                 file = linkedFile;
             }
@@ -300,7 +275,6 @@ export class MarkdownRenderer {
 
         if (this.settings.showLineNumbers) {
             const lines = code.split('\n');
-            // 去掉最后的空行
             if (lines[lines.length - 1].trim() === '') {
                 lines.pop();
             }

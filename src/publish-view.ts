@@ -602,13 +602,13 @@ export class MofaPublishView extends ItemView {
         // 独立 <svg> 标签直接移除
         s = s.replace(/<svg[\s\S]*?<\/svg>/gi, '');
 
-        // 3.5 <math> MathML 标签（微信不支持，KaTeX 的 aria-hidden span 已是可视化回退）
+        // 3.5 <math> / <semantics> MathML 标签（微信不支持）
         s = s.replace(/<math[\s\S]*?<\/math>/gi, '');
+        s = s.replace(/<semantics[\s\S]*?<\/semantics>/gi, '');
         // KaTeX annotation 标签
         s = s.replace(/<annotation[^>]*>[\s\S]*?<\/annotation>/gi, '');
 
         // 3.6 裸 markdown 文字泄露清理
-        // 独立行的 --- 分隔线（应被 markdown-it 处理但因位于 HTML 块后未被识别）
         s = s.replace(/\n---\n/g, '\n');
         s = s.replace(/^---$/gm, '');
 
@@ -619,23 +619,32 @@ export class MofaPublishView extends ItemView {
         // 5. HTML 注释
         s = s.replace(/<!--[\s\S]*?-->/g, '');
 
-        // 6. class 属性
+        // 6. class 属性（代码高亮颜色已由 wechat-compat 转为 inline style）
         s = s.replace(/\s+class="[^"]*"/gi, '');
 
         // 7. data-* 属性
         s = s.replace(/\s+data-[a-z-]+="[^"]*"/gi, '');
 
+        // 7.5 aria-* 属性（微信不支持）
+        s = s.replace(/\s+aria-[a-z-]+="[^"]*"/gi, '');
+
+        // 7.6 id 属性（脚注等产生的 id="fn1"，微信不需要）
+        s = s.replace(/\s+id="[^"]*"/gi, '');
+
+        // 7.7 <s> 标签 → 用 inline style 实现删除线
+        s = s.replace(/<s>([\s\S]*?)<\/s>/gi, '<span style="text-decoration:line-through;color:#999;">$1</span>');
+
         // 8. 控制字符（保留 \t \n \r）
         // eslint-disable-next-line no-control-regex
         s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 
-        // 9. 移除未成功上传的图片（非 http/https/mmbiz src）
+        // 9. 移除未成功上传的图片（非 http/https src）
         s = s.replace(/<img[^>]*\ssrc="([^"]*)"[^>]*>/gi, (match, src) => {
             if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-                return match; // 网络图片或 data URI，保留
+                return match;
             }
             console.warn('[MoFa] 移除未上传的本地图片:', src);
-            return ''; // 本地路径/app://图片，微信不接受
+            return '';
         });
 
         console.debug('[MoFa] sanitizeForWechat 完成，内容长度:', s.length);
