@@ -86,6 +86,9 @@ export class MarkdownRenderer {
         //    ![[image.png|alt文字]] → ![alt文字](image.png)
         let processed = this.preprocessWikiImages(content);
 
+        // 2.5 预处理 Obsidian Callout 语法（> [!NOTE] 等）为 HTML
+        processed = this.preprocessCallouts(processed);
+
         // 3. 处理链接（微信不支持外链）
         if (this.settings.linkStyle === 'footnote') {
             processed = processLinksToFootnotes(processed);
@@ -112,6 +115,68 @@ export class MarkdownRenderer {
         }
 
         return html;
+    }
+
+    /**
+     * 将 Obsidian Callout 语法转换为 HTML div
+     * 格式：> [!TYPE] 标题\n> 内容
+     * 支持类型：NOTE / TIP / IMPORTANT / WARNING / CAUTION
+     */
+    private preprocessCallouts(markdown: string): string {
+        const calloutIcons: Record<string, string> = {
+            NOTE: '📖',
+            TIP: '💡',
+            IMPORTANT: '❗',
+            WARNING: '⚠️',
+            CAUTION: '🔥',
+            INFO: 'ℹ️',
+            SUCCESS: '✅',
+            ERROR: '❌',
+            QUESTION: '❓',
+            QUOTE: '💬',
+            ABSTRACT: '📌',
+        };
+        const calloutColors: Record<string, string> = {
+            NOTE: '#e0f0ff', TIP: '#e6f9e6', IMPORTANT: '#f0e0ff',
+            WARNING: '#fff3cd', CAUTION: '#fdecea', INFO: '#e0f0ff',
+            SUCCESS: '#e6f9e6', ERROR: '#fdecea', QUESTION: '#fff3cd',
+            QUOTE: '#f4f4f4', ABSTRACT: '#f0e0ff',
+        };
+        const calloutBorder: Record<string, string> = {
+            NOTE: '#3b82f6', TIP: '#22c55e', IMPORTANT: '#a855f7',
+            WARNING: '#f59e0b', CAUTION: '#ef4444', INFO: '#3b82f6',
+            SUCCESS: '#22c55e', ERROR: '#ef4444', QUESTION: '#f59e0b',
+            QUOTE: '#aaa', ABSTRACT: '#a855f7',
+        };
+
+        // 匹配整个 callout 块：以 "> [!TYPE]" 开头，连续的 "> " 行为内容
+        return markdown.replace(
+            /^(>\s*\[!(\w+)\]([^\n]*)(?:\n>[^\n]*)*)/gm,
+            (block) => {
+                const lines = block.split('\n');
+                const firstLine = lines[0];
+                const typeMatch = firstLine.match(/^>\s*\[!(\w+)\]\s*(.*)/);
+                if (!typeMatch) return block;
+
+                const type = typeMatch[1].toUpperCase();
+                const titleText = typeMatch[2].trim();
+                const icon = calloutIcons[type] || '📖';
+                const bg = calloutColors[type] || '#e0f0ff';
+                const border = calloutBorder[type] || '#3b82f6';
+                const displayTitle = titleText || type;
+
+                // 提取内容行（去掉开头 > ）
+                const bodyLines = lines.slice(1).map((l) => l.replace(/^>\s?/, ''));
+                const body = bodyLines.join('\n').trim();
+
+                return [
+                    `<div class="mofa-callout" style="background:${bg};border-left:4px solid ${border};border-radius:4px;padding:12px 16px;margin:1em 0;">`,
+                    `<div class="mofa-callout-title" style="font-weight:700;margin-bottom:${body ? '6px' : '0'};">${icon} ${displayTitle}</div>`,
+                    body ? `<div class="mofa-callout-body">${body}</div>` : '',
+                    `</div>`,
+                ].filter(Boolean).join('\n');
+            }
+        );
     }
 
     /**

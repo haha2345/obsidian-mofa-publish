@@ -63,11 +63,12 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         processTables(container);
 
         // 4. 处理代码块
-        processCodeBlocks(container);
+        processCodeBlocks(container, allCSS);
 
         // 4.5 将 CSS 中的 ::before 伪元素转为真实 DOM（微信不支持伪元素）
         injectPseudoBeforeContent(container, allCSS);
         injectCodeBlockDots(container, allCSS);
+        injectMarkerStyles(container, allCSS);
 
         // 5. 处理图片
         processImages(container);
@@ -192,6 +193,7 @@ function injectPseudoBeforeContent(container: HTMLElement, cssText: string) {
  */
 function injectCodeBlockDots(container: HTMLElement, cssText: string) {
     // 检测是否存在 pre::before 且含 box-shadow（三色圆点装饰的特征）
+    // 使用宽泛匹配，兼容 `.mofa-article pre::before` 和裸 `pre::before`
     const preBeforeMatch = cssText.match(/pre::before\s*\{([^}]+)\}/);
     if (!preBeforeMatch) return;
     const decls = preBeforeMatch[1];
@@ -510,7 +512,46 @@ function processTables(container: HTMLElement) {
 /**
  * 代码块处理
  */
-function processCodeBlocks(container: HTMLElement) {
+/**
+ * 将 CSS 中的 ::marker 伪元素转为 li 元素上的真实内联样式。
+ * 微信不支持 ::marker，将颜色等属性直接应用到 li 元素，以保证列表符号颜色正确显示。
+ */
+function injectMarkerStyles(container: HTMLElement, cssText: string) {
+    const markerRegex = /([^{}]+)::marker\s*\{([^{}]+)\}/g;
+    let match;
+    while ((match = markerRegex.exec(cssText)) !== null) {
+        let selector = match[1].trim();
+        const declarations = match[2];
+
+        // 从声明中提取 color、font-size 等属性
+        const props: Array<{ name: string; value: string }> = [];
+        declarations.split(';').forEach((decl) => {
+            const ci = decl.indexOf(':');
+            if (ci > 0) {
+                props.push({ name: decl.slice(0, ci).trim(), value: decl.slice(ci + 1).trim() });
+            }
+        });
+        if (props.length === 0) continue;
+
+        // 清理选择器前缀
+        if (selector.startsWith('.mofa-article ')) {
+            selector = selector.replace('.mofa-article ', '').trim();
+        }
+
+        try {
+            container.querySelectorAll(selector).forEach((el) => {
+                props.forEach(({ name, value }) => {
+                    // ::marker 的属性（color、font-size）可直接应用到 li，在支持 ::marker 的环境中会继承给符号
+                    (el as HTMLElement).style.setProperty(name, value);
+                });
+            });
+        } catch {
+            // 无效选择器
+        }
+    }
+}
+
+function processCodeBlocks(container: HTMLElement, cssText = '') {
     container.querySelectorAll('pre.mofa-code-block').forEach((pre) => {
         const preEl = pre as HTMLElement;
         ss(preEl, 'background-color', '#1e1e1e');
