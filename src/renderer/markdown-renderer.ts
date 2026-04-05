@@ -7,6 +7,10 @@ import { processLinksToFootnotes, processLinksInline } from '../utils/link-handl
 import type { MofaSettings } from '../settings';
 import { App, TFile } from 'obsidian';
 
+interface MarkdownTokenLike {
+    content: string;
+}
+
 /**
  * 墨发 Markdown 渲染引擎
  * 将 Markdown 转换为微信公众号兼容的 HTML
@@ -66,12 +70,12 @@ export class MarkdownRenderer {
         // 使用 markdown-it-katex 识别真正的数学公式（忽略代码块里的 $）
         // 但我们覆盖它的渲染逻辑，直接输出 Codecogs API 图像而不是复杂的 DOM 结构
         md.use(mk, { throwOnError: false });
-        md.renderer.rules.math_inline = (tokens: any, idx: number) => {
+        md.renderer.rules.math_inline = (tokens: MarkdownTokenLike[], idx: number) => {
             const formula = tokens[idx].content;
             const url = `https://latex.codecogs.com/png.image?\\dpi{300}\\bg_white%20\\inline%20${encodeURIComponent(formula.trim())}`;
             return `<img class="mofa-math-img" src="${url}" alt="math formula" style="vertical-align: middle; margin: 0 2px;" />`;
         };
-        md.renderer.rules.math_block = (tokens: any, idx: number) => {
+        md.renderer.rules.math_block = (tokens: MarkdownTokenLike[], idx: number) => {
             const formula = tokens[idx].content;
             const url = `https://latex.codecogs.com/png.image?\\dpi{300}\\bg_white%20${encodeURIComponent(formula.trim())}`;
             return `\n<section style="text-align: center; margin: 10px 0;"><img class="mofa-math-img" src="${url}" alt="math formula" /></section>\n`;

@@ -14,11 +14,18 @@ import { copyRichTextToClipboard } from './utils/clipboard';
 import { getBuiltinThemes, getThemeById, parseExternalTheme, Theme } from './themes/theme-manager';
 import { buildDraftDebugInfo, normalizeWechatTitle, resolveOriginalDocumentId, type DraftDebugInfo, type DraftRequestPayload } from './utils/wechat-publish-debug';
 import { sanitizeForWechat } from './utils/wechat-sanitize';
-import { UploadResult } from './wechat/wechat-api';
+import { UploadResult, type WechatBatchGetMaterialResponse, type WechatDraftAddResponse } from './wechat/wechat-api';
 
 export const MOFA_VIEW_TYPE = 'mofa-publish-view';
 
 type DraftPayloadBase = Omit<DraftRequestPayload, 'content'>;
+type WechatBatchGetMaterialFn = (
+    token: string,
+    type: string,
+    offset?: number,
+    count?: number
+) => Promise<WechatBatchGetMaterialResponse>;
+type WechatAddDraftFn = (token: string, data: DraftRequestPayload) => Promise<WechatDraftAddResponse>;
 
 interface DraftPreparationContext {
     activeFile: TFile;
@@ -598,7 +605,7 @@ export class MofaPublishView extends ItemView {
 
                 const minimalSubset = await deltaDebug(currentTarget.items, async (subset) => {
                     const subsetItems = [...subset];
-                    const html = this.renderBisectTarget(currentTarget as BisectTarget, subsetItems);
+                    const html = this.renderBisectTarget(currentTarget, subsetItems);
                     const attempt = await this.testBisectCandidate(
                         token,
                         wxAddDraft,
@@ -669,7 +676,7 @@ export class MofaPublishView extends ItemView {
         activeFile: TFile,
         token: string,
         wxUploadImage: (data: Blob, filename: string, token: string, type?: string) => Promise<UploadResult>,
-        wxBatchGetMaterial: (token: string, type: string, offset?: number, count?: number) => Promise<any>
+        wxBatchGetMaterial: WechatBatchGetMaterialFn
     ): Promise<DraftPreparationContext> {
         this.setStatus('渲染文章...');
         const content = await this.app.vault.read(activeFile);
@@ -757,7 +764,7 @@ export class MofaPublishView extends ItemView {
         activeFile: TFile,
         token: string,
         wxUploadImage: (data: Blob, filename: string, token: string, type?: string) => Promise<UploadResult>,
-        wxBatchGetMaterial: (token: string, type: string, offset?: number, count?: number) => Promise<any>
+        wxBatchGetMaterial: WechatBatchGetMaterialFn
     ): Promise<string> {
         let thumbMediaId = initialThumbMediaId;
 
@@ -782,7 +789,7 @@ export class MofaPublishView extends ItemView {
         if (!thumbMediaId) {
             try {
                 const materials = await wxBatchGetMaterial(token, 'image');
-                if (materials.item_count > 0) {
+                if ((materials.item_count ?? 0) > 0 && Array.isArray(materials.item) && materials.item[0]?.media_id) {
                     thumbMediaId = materials.item[0].media_id;
                 }
             } catch (error) {
@@ -795,11 +802,11 @@ export class MofaPublishView extends ItemView {
 
     private async sendDraftCandidate(
         token: string,
-        wxAddDraft: (token: string, data: DraftRequestPayload) => Promise<any>,
+        wxAddDraft: WechatAddDraftFn,
         originalDocumentId: string,
         requestPayload: DraftRequestPayload
     ): Promise<{
-        res: any;
+        res: WechatDraftAddResponse;
         debugInfo: DraftDebugInfo;
         result: 'pass' | 'fail-45166' | 'error';
         errcode?: number;
@@ -835,7 +842,7 @@ export class MofaPublishView extends ItemView {
 
     private async testBisectCandidate(
         token: string,
-        wxAddDraft: (token: string, data: DraftRequestPayload) => Promise<any>,
+        wxAddDraft: WechatAddDraftFn,
         originalDocumentId: string,
         requestPayloadBase: DraftPayloadBase,
         html: string,

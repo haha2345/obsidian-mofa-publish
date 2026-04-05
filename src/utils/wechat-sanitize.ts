@@ -34,9 +34,10 @@ export function sanitizeForWechat(html: string, logger?: WechatSanitizeLogger): 
     sanitized = sanitized.replace(/\s+id="[^"]*"/gi, '');
     sanitized = sanitized.replace(/<s>([\s\S]*?)<\/s>/gi, '<span style="text-decoration:line-through;color:#999;">$1</span>');
 
-    // eslint-disable-next-line no-control-regex
+    // eslint-disable-next-line no-control-regex -- WeChat rejects ASCII control characters in HTML payloads, so we strip them before upload.
     sanitized = sanitized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-    sanitized = sanitized.replace(/[\u200B-\u200F\u202A-\u202E\uFEFF\uFE0E\uFE0F]/g, '');
+    sanitized = sanitized.replace(/[\u200B-\u200F\u202A-\u202E\uFEFF]/g, '');
+    sanitized = sanitized.replace(/\uFE0E|\uFE0F/g, '');
 
     sanitized = sanitized.replace(/<img[^>]*\ssrc="([^"]*)"[^>]*>/gi, (match, src) => {
         if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {

@@ -8,9 +8,8 @@
  * 3. 表格兼容处理
  * 4. 图片处理
  *
- * NOTE: This file intentionally uses inline styles via style.setProperty()
- * because WeChat strips <style> tags and CSS classes — inline styles are the
- * ONLY way to deliver styled content to WeChat's editor.
+ * NOTE: This file intentionally keeps styles inline via setCssProps()
+ * because WeChat strips <style> tags and CSS classes.
  */
 
 export interface WechatCompatOptions {
@@ -19,12 +18,12 @@ export interface WechatCompatOptions {
 }
 
 /**
- * Helper: set a CSS property on an element (avoids direct style.xxx = assignment)
+ * Helper: set a CSS property on an element while preserving existing values by default.
  * If `force` is false (default), only sets the property if it's not already set.
  */
 function ss(el: HTMLElement, prop: string, val: string, force = false) {
     if (force || !el.style.getPropertyValue(prop)) {
-        el.style.setProperty(prop, val);
+        el.setCssProps({ [prop]: val });
     }
 }
 
@@ -171,13 +170,14 @@ function injectPseudoBeforeContent(container: HTMLElement, cssText: string) {
                 span.className = 'mofa-pseudo-before';
                 span.textContent = content;
                 // inline-block 确保 color / margin 等生效
-                span.style.setProperty('display', 'inline-block');
+                const spanProps: Record<string, string> = { display: 'inline-block' };
                 otherProps.forEach((prop) => {
                     const ci = prop.indexOf(':');
                     if (ci > 0) {
-                        span.style.setProperty(prop.slice(0, ci).trim(), prop.slice(ci + 1).trim());
+                        spanProps[prop.slice(0, ci).trim()] = prop.slice(ci + 1).trim();
                     }
                 });
+                span.setCssProps(spanProps);
                 (el as HTMLElement).prepend(span);
             });
         } catch {
@@ -215,18 +215,22 @@ function injectCodeBlockDots(container: HTMLElement, cssText: string) {
 
         const dotsRow = document.createElement('div');
         dotsRow.className = 'mofa-code-dots';
-        dotsRow.style.setProperty('display', 'block');
-        dotsRow.style.setProperty('margin-bottom', '12px');
-        dotsRow.style.setProperty('line-height', '1');
+        dotsRow.setCssProps({
+            display: 'block',
+            'margin-bottom': '12px',
+            'line-height': '1',
+        });
 
         dotColors.forEach((color) => {
             const dot = document.createElement('span');
-            dot.style.setProperty('display', 'inline-block');
-            dot.style.setProperty('width', '12px');
-            dot.style.setProperty('height', '12px');
-            dot.style.setProperty('border-radius', '50%');
-            dot.style.setProperty('background-color', color);
-            dot.style.setProperty('margin-right', '6px');
+            dot.setCssProps({
+                display: 'inline-block',
+                width: '12px',
+                height: '12px',
+                'border-radius': '50%',
+                'background-color': color,
+                'margin-right': '6px',
+            });
             dotsRow.appendChild(dot);
         });
 
@@ -250,13 +254,15 @@ function preserveBackground(container: HTMLElement) {
     for (let i = 0; i < children.length; i++) {
         const child = children[i] as HTMLElement;
         if (!child.style.getPropertyValue('background-color')) {
-            child.style.setProperty('background-color', bgColor);
+            child.setCssProps({ 'background-color': bgColor });
         }
     }
 
     const section = document.createElement('section');
-    section.style.setProperty('background-color', bgColor);
-    section.style.setProperty('padding', articleEl.style.getPropertyValue('padding') || '20px');
+    section.setCssProps({
+        'background-color': bgColor,
+        padding: articleEl.style.getPropertyValue('padding') || '20px',
+    });
     while (articleEl.firstChild) {
         section.appendChild(articleEl.firstChild);
     }
@@ -540,10 +546,12 @@ function injectMarkerStyles(container: HTMLElement, cssText: string) {
 
         try {
             container.querySelectorAll(selector).forEach((el) => {
+                const markerProps: Record<string, string> = {};
                 props.forEach(({ name, value }) => {
                     // ::marker 的属性（color、font-size）可直接应用到 li，在支持 ::marker 的环境中会继承给符号
-                    (el as HTMLElement).style.setProperty(name, value);
+                    markerProps[name] = value;
                 });
+                (el as HTMLElement).setCssProps(markerProps);
             });
         } catch {
             // 无效选择器
@@ -602,7 +610,7 @@ function processCodeBlocks(container: HTMLElement, cssText = '') {
         // 将 hljs 的 class 转为 inline color（sanitizer 会删除 class）
         for (const [cls, color] of Object.entries(hljsColors)) {
             preEl.querySelectorAll(`.${cls}`).forEach((el) => {
-                (el as HTMLElement).style.setProperty('color', color);
+                (el as HTMLElement).setCssProps({ color });
             });
         }
     });

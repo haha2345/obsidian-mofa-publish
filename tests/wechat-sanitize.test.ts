@@ -12,7 +12,7 @@ test('sanitizeForWechat strips all anchor tags but keeps visible text', () => {
 
 test('sanitizeForWechat removes invisible selectors and local images', () => {
     const warnings: string[] = [];
-    const html = '<p>↩︎ emoji\uFE0F hidden\u200B</p><img src="assets/test.png"><img src="https://mmbiz.qpic.cn/test.png">';
+    const html = '<p>↩︎ emoji\uFE0F hidden\u200B dir\u200E bell\x07</p><img src="assets/test.png"><img src="https://mmbiz.qpic.cn/test.png">';
 
     const result = sanitizeForWechat(html, {
         warn: (...args: unknown[]) => warnings.push(args.map(String).join(' ')),
@@ -21,6 +21,8 @@ test('sanitizeForWechat removes invisible selectors and local images', () => {
     assert.equal(result.includes('\uFE0E'), false);
     assert.equal(result.includes('\uFE0F'), false);
     assert.equal(result.includes('\u200B'), false);
+    assert.equal(result.includes('\u200E'), false);
+    assert.equal(result.includes('\x07'), false);
     assert.equal(result.includes('assets/test.png'), false);
     assert.match(result, /https:\/\/mmbiz\.qpic\.cn\/test\.png/);
     assert.equal(warnings.length, 1);

@@ -12,7 +12,7 @@
  * - 获取素材列表 (batchget_material)
  */
 
-import { requestUrl, RequestUrlParam, getBlobArrayBuffer, Notice } from 'obsidian';
+import { requestUrl, RequestUrlParam, getBlobArrayBuffer, Notice, type RequestUrlResponse } from 'obsidian';
 
 const WECHAT_API_BASE = 'https://api.weixin.qq.com';
 
@@ -38,6 +38,30 @@ export interface UploadResult {
     media_id: string;
     errcode: number;
     errmsg: string;
+}
+
+export interface WechatApiErrorResponse {
+    errcode?: number;
+    errmsg?: string;
+}
+
+export interface WechatDraftAddResponseJson extends WechatApiErrorResponse {
+    media_id?: string;
+}
+
+export type WechatDraftAddResponse = Omit<RequestUrlResponse, 'json'> & {
+    json: WechatDraftAddResponseJson;
+};
+
+export interface WechatMaterialItem {
+    media_id: string;
+    [key: string]: unknown;
+}
+
+export interface WechatBatchGetMaterialResponse extends WechatApiErrorResponse {
+    total_count?: number;
+    item_count?: number;
+    item?: WechatMaterialItem[];
 }
 
 // ============================================================
@@ -196,11 +220,11 @@ function convertArticle(data: DraftArticle) {
 /**
  * 新建草稿
  */
-export async function wxAddDraft(token: string, data: DraftArticle) {
+export async function wxAddDraft(token: string, data: DraftArticle): Promise<WechatDraftAddResponse> {
     const url = `${WECHAT_API_BASE}/cgi-bin/draft/add?access_token=${token}`;
     const body = { articles: [convertArticle(data)] };
 
-    const res = await requestUrl({
+    const res: WechatDraftAddResponse = await requestUrl({
         method: 'POST',
         url: url,
         throw: false,
@@ -218,7 +242,7 @@ export async function wxBatchGetMaterial(
     type: string,
     offset: number = 0,
     count: number = 10
-) {
+): Promise<WechatBatchGetMaterialResponse> {
     const url = `${WECHAT_API_BASE}/cgi-bin/material/batchget_material?access_token=${token}`;
     const body = { type, offset, count };
 
@@ -229,7 +253,7 @@ export async function wxBatchGetMaterial(
         body: JSON.stringify(body),
     });
 
-    return res.json;
+    return res.json as WechatBatchGetMaterialResponse;
 }
 
 /**
