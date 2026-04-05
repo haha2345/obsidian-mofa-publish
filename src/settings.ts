@@ -136,7 +136,7 @@ export class MofaSettingTab extends PluginSettingTab {
             .setDesc('微信公众号的 app ID')
             .addText((text) =>
                 text
-                    .setPlaceholder('请输入公众号 App ID')
+                    .setPlaceholder('请输入公众号 app ID')
                     .setValue(this.plugin.settings.wechatAppId)
                     .onChange(async (value) => {
                         this.plugin.settings.wechatAppId = value;
