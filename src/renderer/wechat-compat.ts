@@ -15,6 +15,7 @@
 export interface WechatCompatOptions {
     themeCSS: string;
     customCSS?: string;
+    editorCompatMode?: boolean;
 }
 
 /**
@@ -49,6 +50,7 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
     const doc = new DOMParser().parseFromString(`<div class="mofa-render-container">${html}</div>`, 'text/html');
     const container = doc.body.querySelector('.mofa-render-container');
     if (!container || !(container instanceof HTMLElement)) return html;
+    const editorCompatMode = options.editorCompatMode ?? false;
 
     try {
         // 1. 解析主题 CSS 并直接 inline 到匹配元素
@@ -62,11 +64,10 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         processTables(container);
 
         // 4. 处理代码块
-        processCodeBlocks(container, allCSS);
+        processCodeBlocks(container, allCSS, editorCompatMode);
 
         // 4.5 将 CSS 中的 ::before 伪元素转为真实 DOM（微信不支持伪元素）
         injectPseudoBeforeContent(container, allCSS);
-        injectCodeBlockDots(container, allCSS);
         injectMarkerStyles(container, allCSS);
 
         // 5. 处理图片
@@ -79,7 +80,7 @@ export function makeWechatCompatible(html: string, options: WechatCompatOptions)
         processDividers(container);
 
         // 7. 背景色保留（微信编辑器会剥离最外层背景，用 section 包裹保留）
-        preserveBackground(container);
+        preserveBackground(container, editorCompatMode);
 
         // 8. 输出 HTML
         let result = serializeChildren(container);
@@ -187,86 +188,68 @@ function injectPseudoBeforeContent(container: HTMLElement, cssText: string) {
 }
 
 /**
- * 将 pre::before 的 CSS 三色圆点装饰（macOS 红黄绿风格）转为真实 DOM 元素。
- * 原始技术：background + box-shadow 偏移实现三个圆点，微信不支持。
- * 替换为：三个真实 <span> 元素内联排列。
- */
-function injectCodeBlockDots(container: HTMLElement, cssText: string) {
-    // 检测是否存在 pre::before 且含 box-shadow（三色圆点装饰的特征）
-    // 使用宽泛匹配，兼容 `.mofa-article pre::before` 和裸 `pre::before`
-    const preBeforeMatch = cssText.match(/pre::before\s*\{([^}]+)\}/);
-    if (!preBeforeMatch) return;
-    const decls = preBeforeMatch[1];
-    if (!decls.includes('box-shadow')) return;
-
-    // 从 background 提取第一个圆点色，从 box-shadow 提取后两个
-    const bgMatch = decls.match(/background(?:-color)?:\s*(#[0-9a-fA-F]{3,8})/);
-    const shadowMatches = [...decls.matchAll(/#([0-9a-fA-F]{3,8})/g)].map((m) => `#${m[1]}`);
-    // 去掉背景色自身，剩余的就是 box-shadow 中的颜色
-    const firstColor = bgMatch ? bgMatch[1] : '#ff5f56';
-    const shadowColors = shadowMatches.filter((c) => c !== firstColor).slice(0, 2);
-    const dotColors = [firstColor, ...shadowColors];
-    // 保底：如果解析失败就用默认三色
-    while (dotColors.length < 3) dotColors.push(['#ffbd2e', '#27c93f'][dotColors.length - 1] ?? '#ccc');
-
-    container.querySelectorAll('pre').forEach((pre) => {
-        // 防止重复注入
-        if (pre.querySelector('.mofa-code-dots')) return;
-
-        const dotsRow = document.createElement('div');
-        dotsRow.className = 'mofa-code-dots';
-        dotsRow.setCssProps({
-            display: 'block',
-            'margin-bottom': '12px',
-            'line-height': '1',
-        });
-
-        dotColors.forEach((color) => {
-            const dot = document.createElement('span');
-            dot.setCssProps({
-                display: 'inline-block',
-                width: '12px',
-                height: '12px',
-                'border-radius': '50%',
-                'background-color': color,
-                'margin-right': '6px',
-            });
-            dotsRow.appendChild(dot);
-        });
-
-        pre.prepend(dotsRow);
-    });
-}
-
-/**
  * 保留背景色：微信编辑器会覆盖最外层 div 的背景
  */
-function preserveBackground(container: HTMLElement) {
+function preserveBackground(container: HTMLElement, editorCompatMode: boolean) {
     const articleEl = container.querySelector('.mofa-article');
     if (!articleEl || !(articleEl instanceof HTMLElement)) return;
 
     const bgColor = articleEl.style.getPropertyValue('background-color');
-    if (!bgColor || bgColor === 'transparent' || bgColor === '#fff' || bgColor === '#ffffff' || bgColor === 'rgb(255, 255, 255)') {
+    const bgImage = articleEl.style.getPropertyValue('background-image');
+    const bgSize = articleEl.style.getPropertyValue('background-size');
+    const bgPosition = articleEl.style.getPropertyValue('background-position');
+    const bgRepeat = articleEl.style.getPropertyValue('background-repeat') || 'repeat';
+    const hasImageBackground = Boolean(bgImage && bgImage !== 'none');
+    const hasSolidBackground = Boolean(
+        bgColor
+        && bgColor !== 'transparent'
+        && bgColor !== '#fff'
+        && bgColor !== '#ffffff'
+        && bgColor !== 'rgb(255, 255, 255)'
+    );
+
+    if (!hasImageBackground && !hasSolidBackground) {
         return;
     }
+
+    const derivedPatternColor = hasImageBackground
+        ? (bgImage.match(/#(?:[0-9a-fA-F]{3}){1,2}\b/)?.[0] || '')
+        : '';
+    const compatBackgroundColor = editorCompatMode
+        ? (derivedPatternColor || bgColor || '#f8fbff')
+        : bgColor;
 
     const children = articleEl.children;
     for (let i = 0; i < children.length; i++) {
         const child = children[i] as HTMLElement;
-        if (!child.style.getPropertyValue('background-color')) {
-            child.setCssProps({ 'background-color': bgColor });
+        if (compatBackgroundColor && !child.style.getPropertyValue('background-color')) {
+            child.setCssProps({ 'background-color': compatBackgroundColor });
         }
     }
 
-    const section = document.createElement('section');
-    section.setCssProps({
-        'background-color': bgColor,
+    const wrapper = document.createElement('div');
+    const wrapperProps: Record<string, string> = {
         padding: articleEl.style.getPropertyValue('padding') || '20px',
-    });
-    while (articleEl.firstChild) {
-        section.appendChild(articleEl.firstChild);
+    };
+    if (compatBackgroundColor) {
+        wrapperProps['background-color'] = compatBackgroundColor;
     }
-    articleEl.appendChild(section);
+    if (!editorCompatMode && hasImageBackground && bgImage) {
+        wrapperProps['background-image'] = bgImage;
+        wrapperProps['background-size'] = bgSize || '24px 24px';
+        wrapperProps['background-position'] = bgPosition || 'center top';
+        wrapperProps['background-repeat'] = bgRepeat;
+    }
+    if (editorCompatMode) {
+        wrapperProps['border-radius'] = articleEl.style.getPropertyValue('border-radius') || '12px';
+        wrapperProps['box-shadow'] = articleEl.style.getPropertyValue('box-shadow') || '0 6px 18px rgba(15, 23, 42, 0.04)';
+        wrapperProps.border = articleEl.style.getPropertyValue('border') || '1px solid rgba(47, 84, 235, 0.08)';
+    }
+    wrapper.setCssProps(wrapperProps);
+    while (articleEl.firstChild) {
+        wrapper.appendChild(articleEl.firstChild);
+    }
+    articleEl.appendChild(wrapper);
 }
 
 /**
@@ -559,7 +542,7 @@ function injectMarkerStyles(container: HTMLElement, cssText: string) {
     }
 }
 
-function processCodeBlocks(container: HTMLElement, cssText = '') {
+function processCodeBlocks(container: HTMLElement, cssText = '', editorCompatMode = false) {
     // hljs class → inline color 映射（One Dark 主题配色）
     const hljsColors: Record<string, string> = {
         'hljs-keyword': '#c678dd',
@@ -594,18 +577,67 @@ function processCodeBlocks(container: HTMLElement, cssText = '') {
         'hljs-deletion': '#e06c75',
     };
 
+    if (editorCompatMode) {
+        container.querySelectorAll('.mofa-code-shell').forEach((shell) => {
+            const shellEl = shell as HTMLElement;
+            ss(shellEl, 'margin-bottom', '1em', true);
+            ss(shellEl, 'background-color', '#21252b', true);
+            ss(shellEl, 'border-radius', '8px', true);
+            ss(shellEl, 'overflow', 'hidden', true);
+            ss(shellEl, 'box-shadow', '0 4px 12px rgba(0,0,0,0.1)', true);
+        });
+
+        container.querySelectorAll('.mofa-code-header').forEach((header) => {
+            const headerEl = header as HTMLElement;
+            ss(headerEl, 'display', 'flex', true);
+            ss(headerEl, 'justify-content', 'flex-end', true);
+            ss(headerEl, 'padding', '12px 16px 0', true);
+            ss(headerEl, 'background-color', '#21252b', true);
+        });
+
+        container.querySelectorAll('span.mofa-code-lang').forEach((label) => {
+            const labelEl = label as HTMLElement;
+            ss(labelEl, 'font-size', '12px', true);
+            ss(labelEl, 'line-height', '1.2', true);
+            ss(labelEl, 'text-transform', 'uppercase', true);
+            ss(labelEl, 'letter-spacing', '0.08em', true);
+            ss(labelEl, 'color', 'rgba(255,255,255,0.55)', true);
+        });
+    }
+
     container.querySelectorAll('pre.mofa-code-block').forEach((pre) => {
         const preEl = pre as HTMLElement;
-        ss(preEl, 'background-color', '#21252b');
-        ss(preEl, 'color', '#d4d4d4');
-        ss(preEl, 'padding', '16px', true);
-        ss(preEl, 'border-radius', '8px', true);
-        ss(preEl, 'overflow', 'auto', true);
-        ss(preEl, 'font-size', '13px');
-        ss(preEl, 'line-height', '1.6', true);
-        ss(preEl, 'margin-bottom', '1em', true);
-        ss(preEl, 'box-shadow', '0 4px 12px rgba(0,0,0,0.1)', true);
-        ss(preEl, 'position', 'relative', true);
+        if (editorCompatMode && preEl.hasClass('mofa-code-block-editor')) {
+            ss(preEl, 'background-color', 'transparent', true);
+            ss(preEl, 'color', '#d4d4d4');
+            ss(preEl, 'padding', '0 16px 16px', true);
+            ss(preEl, 'border-radius', '0', true);
+            ss(preEl, 'overflow', 'auto', true);
+            ss(preEl, 'font-size', '13px');
+            ss(preEl, 'line-height', '1.6', true);
+            ss(preEl, 'margin-bottom', '0', true);
+            ss(preEl, 'box-shadow', 'none', true);
+            ss(preEl, 'position', 'relative', true);
+        } else {
+            ss(preEl, 'background-color', '#21252b');
+            ss(preEl, 'color', '#d4d4d4');
+            ss(preEl, 'padding', '16px', true);
+            ss(preEl, 'border-radius', '8px', true);
+            ss(preEl, 'overflow', 'auto', true);
+            ss(preEl, 'font-size', '13px');
+            ss(preEl, 'line-height', '1.6', true);
+            ss(preEl, 'margin-bottom', '1em', true);
+            ss(preEl, 'box-shadow', '0 4px 12px rgba(0,0,0,0.1)', true);
+            ss(preEl, 'position', 'relative', true);
+        }
+
+        const codeEl = preEl.querySelector('code');
+        if (editorCompatMode && codeEl instanceof HTMLElement) {
+            ss(codeEl, 'display', 'block', true);
+            ss(codeEl, 'background-color', 'transparent', true);
+            ss(codeEl, 'padding', '0', true);
+            ss(codeEl, 'white-space', 'normal', true);
+        }
 
         // 将 hljs 的 class 转为 inline color（sanitizer 会删除 class）
         for (const [cls, color] of Object.entries(hljsColors)) {
@@ -614,6 +646,34 @@ function processCodeBlocks(container: HTMLElement, cssText = '') {
             });
         }
     });
+
+    if (editorCompatMode) {
+        container.querySelectorAll('span.mofa-code-line').forEach((line) => {
+            const lineEl = line as HTMLElement;
+            ss(lineEl, 'display', 'block', true);
+            ss(lineEl, 'white-space', 'pre-wrap', true);
+            ss(lineEl, 'word-break', 'break-word', true);
+            ss(lineEl, 'line-height', '1.7', true);
+            ss(lineEl, 'font-family', '"SF Mono", "Fira Code", Menlo, monospace', true);
+            ss(lineEl, 'color', '#d4d4d4', true);
+        });
+
+        container.querySelectorAll('span.mofa-code-line-number').forEach((num) => {
+            const numEl = num as HTMLElement;
+            ss(numEl, 'display', 'inline-block', true);
+            ss(numEl, 'width', '2.8em', true);
+            ss(numEl, 'margin-right', '12px', true);
+            ss(numEl, 'color', 'rgba(255,255,255,0.35)', true);
+            ss(numEl, 'text-align', 'right', true);
+            ss(numEl, 'user-select', 'none', true);
+        });
+
+        container.querySelectorAll('span.mofa-code-line-content').forEach((content) => {
+            const contentEl = content as HTMLElement;
+            ss(contentEl, 'white-space', 'pre-wrap', true);
+            ss(contentEl, 'word-break', 'break-word', true);
+        });
+    }
 
     container.querySelectorAll(':not(pre) > code').forEach((code) => {
         const codeEl = code as HTMLElement;

@@ -16,6 +16,7 @@ export interface MofaSettings {
     customCssNote: string;
     embedStyle: 'quote' | 'inline';
     showLineNumbers: boolean;
+    wechatEditorCompatMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: MofaSettings = {
@@ -28,6 +29,7 @@ export const DEFAULT_SETTINGS: MofaSettings = {
     customCssNote: '',
     embedStyle: 'quote',
     showLineNumbers: true,
+    wechatEditorCompatMode: false,
 };
 
 export class MofaSettingTab extends PluginSettingTab {
@@ -106,6 +108,18 @@ export class MofaSettingTab extends PluginSettingTab {
                     .setValue(this.plugin.settings.showLineNumbers)
                     .onChange(async (value) => {
                         this.plugin.settings.showLineNumbers = value;
+                        await this.plugin.saveSettings();
+                    })
+            );
+
+        new Setting(containerEl)
+            .setName('微信编辑器兼容模式')
+            .setDesc('开启后会使用更保守的代码块和背景结构，便于在公众号后台继续编辑，部分装饰效果会降级')
+            .addToggle((toggle) =>
+                toggle
+                    .setValue(this.plugin.settings.wechatEditorCompatMode)
+                    .onChange(async (value) => {
+                        this.plugin.settings.wechatEditorCompatMode = value;
                         await this.plugin.saveSettings();
                     })
             );

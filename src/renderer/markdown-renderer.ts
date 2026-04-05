@@ -4,6 +4,7 @@ import taskLists from 'markdown-it-task-lists';
 import mk from 'markdown-it-katex';
 import hljs from 'highlight.js';
 import { processLinksToFootnotes, processLinksInline } from '../utils/link-handler';
+import { buildCodeBlockHtml } from '../utils/code-block-render';
 import type { MofaSettings } from '../settings';
 import { App, TFile } from 'obsidian';
 
@@ -123,7 +124,32 @@ export class MarkdownRenderer {
         // 7. 后处理 Obsidian Callout（将渲染后的 blockquote 含 [!TYPE] 转为样式 div）
         html = this.postRenderCallouts(html);
 
+        // 8. 后处理图片 Caption（图片后紧跟的斜体文字 *xxx* 自动变为居中小字说明）
+        html = this.postRenderImageCaptions(html);
+
         return html;
+    }
+
+    /**
+     * 后处理图片 Caption：
+     * 在 Markdown 中图片后紧跟一行斜体文字（`*caption*`），渲染后变为：
+     *   <p><img ...></p>
+     *   <p><em>caption text</em></p>
+     * 本方法将这种模式合并为居中显示的图文说明块。
+     */
+    private postRenderImageCaptions(html: string): string {
+        // 匹配：含 <img> 的 <p> 标签，紧跟着一个仅含 <em> 的 <p> 标签
+        return html.replace(
+            /(<p[^>]*>(?:\s*<img[^>]*>\s*)+<\/p>)\s*<p[^>]*>\s*<em[^>]*>([\s\S]*?)<\/em>\s*<\/p>/gi,
+            (_, imgBlock, captionText) => {
+                return [
+                    '<section style="text-align:center;margin:1em 0;">',
+                    imgBlock.replace(/<p[^>]*>/, '<p style="text-align:center;margin:0;">'),
+                    `<p style="text-align:center;margin:4px 0 0;font-size:14px;color:#999;">${captionText}</p>`,
+                    '</section>',
+                ].join('\n');
+            }
+        );
     }
 
     /**
@@ -284,20 +310,10 @@ export class MarkdownRenderer {
      * 包装代码块（含行号支持）
      */
     private wrapCodeBlock(code: string, lang: string): string {
-        const langLabel = lang ? `<span class="mofa-code-lang">${lang}</span>` : '';
-
-        if (this.settings.showLineNumbers) {
-            const lines = code.split('\n');
-            if (lines[lines.length - 1].trim() === '') {
-                lines.pop();
-            }
-            const numberedCode = lines
-                .map((line, i) => `<span class="mofa-line"><span class="mofa-line-number">${i + 1}</span>${line}</span>`)
-                .join('\n');
-            return `<pre class="mofa-code-block">${langLabel}<code class="hljs language-${lang}">${numberedCode}</code></pre>`;
-        }
-
-        return `<pre class="mofa-code-block">${langLabel}<code class="hljs language-${lang}">${code}</code></pre>`;
+        return buildCodeBlockHtml(code, lang, {
+            showLineNumbers: this.settings.showLineNumbers,
+            editorCompatMode: this.settings.wechatEditorCompatMode,
+        });
     }
 
     private escapeHtml(str: string): string {

@@ -370,7 +370,10 @@ export class MofaPublishView extends ItemView {
             // 5. 应用主题样式到预览（使用 inline 化方式，因为 Obsidian 不允许创建 link/style 元素）
             // 基础保护样式已移入 styles.css (.mofa-preview .mofa-article)
             // 主题 CSS 通过 inline 化注入到文章元素
-            const previewHtml = makeWechatCompatible(articleHtml, { themeCSS });
+            const previewHtml = makeWechatCompatible(articleHtml, {
+                themeCSS,
+                editorCompatMode: this.plugin.settings.wechatEditorCompatMode,
+            });
 
             // 使用 DOM API 构建预览内容
             this.previewEl.empty();
@@ -426,7 +429,10 @@ export class MofaPublishView extends ItemView {
 
             // 微信 DOM 兼容性处理（inline 化样式）
             this.setStatus('适配微信格式...');
-            const wechatHtml = makeWechatCompatible(htmlWithImages, { themeCSS });
+            const wechatHtml = makeWechatCompatible(htmlWithImages, {
+                themeCSS,
+                editorCompatMode: this.plugin.settings.wechatEditorCompatMode,
+            });
 
             // 复制到剪贴板
             await copyRichTextToClipboard(wechatHtml);
@@ -693,7 +699,10 @@ export class MofaPublishView extends ItemView {
         console.debug('[MoFa] 图片上传完成，HTML 长度:', htmlWithUploadedImages.length);
 
         this.setStatus('适配微信格式...');
-        const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, { themeCSS });
+        const wechatHtml = makeWechatCompatible(htmlWithUploadedImages, {
+            themeCSS,
+            editorCompatMode: this.plugin.settings.wechatEditorCompatMode,
+        });
         console.debug('[MoFa] 微信兼容处理完成，HTML 长度:', wechatHtml.length);
 
         const metadata = this.renderer.extractFrontmatter(content);

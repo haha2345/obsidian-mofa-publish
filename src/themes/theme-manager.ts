@@ -415,7 +415,6 @@ const geekTheme = `
 .mofa-article li::marker { color: #2F54EB; }
 .mofa-article p code, .mofa-article li code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace; font-size: 13.5px; background-color: #f7f7f9; color: #d63384; padding: 2px 6px; border-radius: 4px; margin: 0 3px; word-break: break-all; }
 .mofa-article pre { margin: 0 0 20px 0; background-color: #21252b !important; border-radius: 8px; padding: 16px; overflow-x: auto; box-shadow: 0 4px 12px rgba(0,0,0,0.1); position: relative; }
-.mofa-article pre::before { content: ''; display: block; width: 12px; height: 12px; border-radius: 50%; background: #ff5f56; box-shadow: 20px 0 0 #ffbd2e, 40px 0 0 #27c93f; margin-bottom: 16px; }
 .mofa-article pre code:not(.hljs) { font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size: 13.5px; color: #abb2bf; line-height: 1.5; white-space: pre; background: transparent; padding: 0; }
 .mofa-article img { border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
 `;
